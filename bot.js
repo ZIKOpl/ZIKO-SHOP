@@ -31,7 +31,7 @@ const GUILD_ID = "1416496222419550412";
 const STAFF_ROLE_ID = "1416528620750372944"; 
 const CATEGORY_ID = "1416528820428869793"; 
 const STOCK_CHANNEL_ID = "1416528608775901194"; 
-const ADMIN_CHANNEL_ID = "1416904307428691978";
+const ADMIN_PANEL_CHANNEL_ID = "1416904307428691978";
 
 // === Stock File ===
 const STOCK_FILE = path.join(__dirname, "stock.json");
@@ -225,3 +225,4 @@ client.once("ready", async ()=>{
 });
 
 client.login(TOKEN);
+
