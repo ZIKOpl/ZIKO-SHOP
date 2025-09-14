@@ -1,7 +1,7 @@
 // === Modules ===
 const { 
-  Client, GatewayIntentBits, Partials, EmbedBuilder, PermissionsBitField, 
-  ActionRowBuilder, ButtonBuilder, ButtonStyle, StringSelectMenuBuilder 
+  Client, GatewayIntentBits, Partials, EmbedBuilder, 
+  PermissionsBitField, ActionRowBuilder, StringSelectMenuBuilder, ButtonBuilder, ButtonStyle, InteractionType 
 } = require("discord.js");
 const express = require("express");
 const bodyParser = require("body-parser");
@@ -31,182 +31,144 @@ const GUILD_ID = "1416496222419550412";
 const STAFF_ROLE_ID = "1416528620750372944"; 
 const CATEGORY_ID = "1416528820428869793"; 
 const STOCK_CHANNEL_ID = "1416528608775901194"; 
-const ADMIN_CHANNEL_ID = "1416904307428691978"; // où sera le panel
+const ADMIN_CHANNEL_ID = "1416904307428691978";
 
+// === Chemin vers stock ===
 const STOCK_FILE = path.join(__dirname, "stock.json");
 
-// === Utils Stock ===
+// === Images produits ===
+const PRODUCT_IMAGES = {
+  "nitro1m": "https://zikoshop.netlify.app/Assets/nitro.png",
+  "nitro1y": "https://zikoshop.netlify.app/Assets/nitro.png",
+  "boost1m": "https://zikoshop.netlify.app/Assets/nitroboost.png",
+  "boost1y": "https://zikoshop.netlify.app/Assets/nitroboost.png"
+};
+
+// === Fonctions Stock ===
 function getStock() {
-    if (!fs.existsSync(STOCK_FILE)) return {};
-    return JSON.parse(fs.readFileSync(STOCK_FILE, "utf8"));
+  if (!fs.existsSync(STOCK_FILE)) return {};
+  return JSON.parse(fs.readFileSync(STOCK_FILE, "utf8"));
 }
 
 function saveStock(stock) {
-    fs.writeFileSync(STOCK_FILE, JSON.stringify(stock, null, 2), "utf8");
+  fs.writeFileSync(STOCK_FILE, JSON.stringify(stock, null, 2), "utf8");
 }
 
-// === Update stock embed Discord ===
+// === Embed Stock ===
+let stockMessageId = null;
 async function updateStockEmbed() {
-    const stock = getStock();
-    try {
-        const guild = await client.guilds.fetch(GUILD_ID);
-        const channel = await guild.channels.fetch(STOCK_CHANNEL_ID);
+  const stock = getStock();
+  try {
+    const guild = await client.guilds.fetch(GUILD_ID);
+    const channel = await guild.channels.fetch(STOCK_CHANNEL_ID);
 
-        const embed = new EmbedBuilder()
-            .setTitle("📦 Stock actuel")
-            .setColor(0x00ff99)
-            .setDescription("Voici le stock disponible :")
-            .setTimestamp()
-            .setFooter({ text: "ZIKO SHOP - Stock mis à jour" });
+    const embed = new EmbedBuilder()
+      .setTitle("📦 Stock actuel")
+      .setColor(0x00ff99)
+      .setDescription("Voici les produits disponibles sur le site :")
+      .setTimestamp()
+      .setFooter({ text: "ZIKO SHOP" });
 
-        for (const [key, value] of Object.entries(stock)) {
-            let productName = key === "nitro1m" ? "Nitro 1 mois" :
-                              key === "nitro1y" ? "Nitro 1 an" :
-                              key === "boost1m" ? "Nitro Boost 1 mois" :
-                              "Nitro Boost 1 an";
-            embed.addFields({ name: productName, value: `Quantité : **${value}**`, inline: true });
-        }
-
-        const messages = await channel.messages.fetch({ limit: 10 });
-        const msg = messages.find(m => m.author.id === client.user.id);
-        if (msg) await msg.edit({ embeds: [embed] });
-        else await channel.send({ embeds: [embed] });
-
-    } catch (err) {
-        console.error("Erreur mise à jour embed stock :", err);
+    for (const [key, qty] of Object.entries(stock)) {
+      let productName = key === "nitro1m" ? "Nitro 1 mois" :
+                        key === "nitro1y" ? "Nitro 1 an" :
+                        key === "boost1m" ? "Nitro Boost 1 mois" :
+                        "Nitro Boost 1 an";
+      embed.addFields({
+        name: productName,
+        value: `Quantité : **${qty}**`,
+        inline: true
+      });
+      embed.setThumbnail(PRODUCT_IMAGES[key]);
     }
+
+    if (stockMessageId) {
+      const msg = await channel.messages.fetch(stockMessageId).catch(() => null);
+      if (msg) return await msg.edit({ embeds: [embed] });
+    }
+
+    const newMsg = await channel.send({ embeds: [embed] });
+    stockMessageId = newMsg.id;
+  } catch (err) {
+    console.error("Erreur embed stock :", err);
+  }
 }
 
-// === API pour le site ===
-app.get("/stock.json", (req, res) => {
-    const stock = getStock();
-    res.json(stock);
-});
+// === Admin Panel ===
+async function sendAdminPanel() {
+  const guild = await client.guilds.fetch(GUILD_ID);
+  const channel = await guild.channels.fetch(STOCK_CHANNEL_ID);
 
-app.post("/order", async (req, res) => {
-    const { username, discordId, cart } = req.body;
-    if (!username || !discordId || !cart) return res.status(400).send("Données manquantes");
+  const stock = getStock();
+  const embed = new EmbedBuilder()
+    .setTitle("🛠️ Panel Admin Stock")
+    .setColor(0x0099ff)
+    .setDescription("Gérez le stock des produits ici.")
+    .setTimestamp();
 
-    const stock = getStock();
+  for (const [key, qty] of Object.entries(stock)) {
+    let productName = key === "nitro1m" ? "Nitro 1 mois" :
+                      key === "nitro1y" ? "Nitro 1 an" :
+                      key === "boost1m" ? "Nitro Boost 1 mois" :
+                      "Nitro Boost 1 an";
+    embed.addFields({ name: productName, value: `Stock actuel : **${qty}**`, inline: true });
+  }
 
-    for (const item of cart) {
-        if (!stock[item.productId] || stock[item.productId] < item.qty) {
-            return res.status(400).send(`Stock insuffisant pour ${item.name}`);
-        }
-    }
+  const row = new ActionRowBuilder().addComponents(
+    new StringSelectMenuBuilder()
+      .setCustomId("stock_admin")
+      .setPlaceholder("Sélectionnez une action")
+      .addOptions([
+        { label: "Ajouter Nitro 1 mois", value: "add_nitro1m" },
+        { label: "Retirer Nitro 1 mois", value: "remove_nitro1m" },
+        { label: "Ajouter Nitro 1 an", value: "add_nitro1y" },
+        { label: "Retirer Nitro 1 an", value: "remove_nitro1y" },
+        { label: "Ajouter Boost 1 mois", value: "add_boost1m" },
+        { label: "Retirer Boost 1 mois", value: "remove_boost1m" },
+        { label: "Ajouter Boost 1 an", value: "add_boost1y" },
+        { label: "Retirer Boost 1 an", value: "remove_boost1y" }
+      ])
+  );
 
-    cart.forEach(item => stock[item.productId] -= item.qty);
+  await channel.send({ embeds: [embed], components: [row] });
+}
+
+// === Interaction Admin ===
+client.on("interactionCreate", async (interaction) => {
+  if (!interaction.isStringSelectMenu()) return;
+
+  const stock = getStock();
+  const value = interaction.values[0];
+
+  if (value.startsWith("add_")) {
+    const key = value.split("_")[1] + (value.endsWith("1y") ? "y" : "m");
+    stock[key] = (stock[key] || 0) + 1;
     saveStock(stock);
+    await interaction.reply({ content: `✅ Stock ajouté pour ${key}`, ephemeral: true });
+  } else if (value.startsWith("remove_")) {
+    const key = value.split("_")[1] + (value.endsWith("1y") ? "y" : "m");
+    stock[key] = Math.max((stock[key] || 0) - 1, 0);
+    saveStock(stock);
+    await interaction.reply({ content: `⚠️ Stock retiré pour ${key}`, ephemeral: true });
+  }
 
-    try {
-        const guild = await client.guilds.fetch(GUILD_ID);
-        const member = await guild.members.fetch(discordId);
-        const channel = await guild.channels.create({
-            name: `ticket-${username}`,
-            type: 0,
-            parent: CATEGORY_ID,
-            permissionOverwrites: [
-                { id: guild.id, deny: [PermissionsBitField.Flags.ViewChannel] },
-                { id: member.id, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages] },
-                { id: STAFF_ROLE_ID, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages] }
-            ]
-        });
-
-        const summary = {};
-        let total = 0;
-        cart.forEach(item => {
-            if (summary[item.name]) {
-                summary[item.name].qty += item.qty;
-                summary[item.name].price += item.price * item.qty;
-            } else {
-                summary[item.name] = { qty: item.qty, price: item.price * item.qty };
-            }
-            total += item.price * item.qty;
-        });
-
-        const embed = new EmbedBuilder()
-            .setTitle("🛒 Nouvelle commande")
-            .setColor(0xff4500)
-            .setDescription(`Merci ${member} pour ta commande ! 🎉`)
-            .addFields(
-                ...Object.entries(summary).map(([name, info]) => ({ name, value: `Quantité : **${info.qty}** — Total : **${info.price}€**` })),
-                { name: "Total général", value: `**${total}€**` },
-                { name: "Pseudo Discord", value: username },
-                { name: "Discord ID", value: discordId }
-            );
-
-        const row = new ActionRowBuilder().addComponents(
-            new ButtonBuilder().setCustomId("close_ticket").setLabel("Fermer la commande").setStyle(ButtonStyle.Danger)
-        );
-
-        await channel.send({ content: `${member}`, embeds: [embed], components: [row] });
-        await updateStockEmbed();
-        res.send("Commande envoyée !");
-
-    } catch (err) {
-        console.error(err);
-        res.status(500).send("Erreur côté bot");
-    }
+  await updateStockEmbed();
+  await sendAdminPanel();
 });
 
-// === Interaction bouton ===
-client.on("interactionCreate", async interaction => {
-    if (interaction.isButton()) {
-        if (interaction.customId === "close_ticket") await interaction.channel.delete();
-    }
-
-    if (interaction.isStringSelectMenu()) {
-        // Admin stock menu
-        if (interaction.customId === "admin_stock_menu") {
-            const value = interaction.values[0]; // format: action|product|qty
-            const [action, product, qtyStr] = value.split("|");
-            const qty = parseInt(qtyStr, 10);
-            const stock = getStock();
-            if (action === "add") stock[product] = (stock[product] || 0) + qty;
-            else if (action === "remove") stock[product] = Math.max(0, (stock[product] || 0) - qty);
-            saveStock(stock);
-            await interaction.reply({ content: `Stock mis à jour pour ${product} !`, ephemeral: true });
-            await updateStockEmbed();
-        }
-    }
+// === Serveur Web pour fetch stock ===
+app.get("/stock.json", (req, res) => {
+  res.json(getStock());
 });
 
-// === Commande panel admin ===
-client.on("messageCreate", async message => {
-    if (message.content === "!panel" && message.member.roles.cache.has(STAFF_ROLE_ID)) {
-        const stock = getStock();
-        const embed = new EmbedBuilder()
-            .setTitle("🛠 Panel Admin Stock")
-            .setColor(0xffd700)
-            .setDescription("Sélectionnez une action et un produit pour modifier le stock :\nFormat : action|produit|quantité");
+app.listen(3000, () => console.log("API bot en ligne sur port 3000"));
 
-        const select = new StringSelectMenuBuilder()
-            .setCustomId("admin_stock_menu")
-            .setPlaceholder("Sélectionnez une action")
-            .addOptions([
-                { label: "Ajouter Nitro 1 mois", value: "add|nitro1m|1" },
-                { label: "Supprimer Nitro 1 mois", value: "remove|nitro1m|1" },
-                { label: "Ajouter Nitro 1 an", value: "add|nitro1y|1" },
-                { label: "Supprimer Nitro 1 an", value: "remove|nitro1y|1" },
-                { label: "Ajouter Boost 1 mois", value: "add|boost1m|1" },
-                { label: "Supprimer Boost 1 mois", value: "remove|boost1m|1" },
-                { label: "Ajouter Boost 1 an", value: "add|boost1y|1" },
-                { label: "Supprimer Boost 1 an", value: "remove|boost1y|1" }
-            ]);
-
-        const row = new ActionRowBuilder().addComponents(select);
-        await message.channel.send({ embeds: [embed], components: [row] });
-    }
-});
-
-// === Bot ready ===
+// === Bot Ready ===
 client.once("ready", async () => {
-    console.log(`Bot connecté : ${client.user.tag}`);
-    await updateStockEmbed();
-    setInterval(updateStockEmbed, 10000);
+  console.log(`Bot connecté en tant que ${client.user.tag}`);
+  await updateStockEmbed();
+  await sendAdminPanel();
+  setInterval(updateStockEmbed, 10 * 1000); // maj toutes les 30 sec
 });
 
-// === Serveur web ===
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`API du bot en ligne sur port ${PORT}`));
 client.login(TOKEN);
