@@ -26,7 +26,7 @@ app.use(cors());
 app.use(bodyParser.json());
 
 // === CONFIG ===
-const TOKEN = "MTQxNjc0ODMxNjg3NTU1ODkxMw.GUWV7c.JkNAZvzEmXpouFRoRzTEQKTkYusbXPudZc5t0M";  
+const TOKEN = process.env.DISCORD_TOKEN;
 const GUILD_ID = "1416496222419550412";
 const STAFF_ROLE_ID = "1416528620750372944";
 const CATEGORY_ID = "1416528820428869793";
@@ -225,4 +225,5 @@ client.once("ready", async ()=>{
 });
 
 client.login(TOKEN);
+
 
