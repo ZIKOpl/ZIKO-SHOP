@@ -28,7 +28,7 @@ app.use(cors()); // Autorise toutes origines
 app.use(bodyParser.json());
 
 // === CONFIG ===
-const TOKEN = "MTQxNjc0ODMxNjg3NTU1ODkxMw.GER_kK.8LmeH_q9Up1e5caXfZyyGIJ3nBF6NHGaHyjTHk";  
+const TOKEN = "MTQxNjc0ODMxNjg3NTU1ODkxMw.GrZNfH.IdQEh4kkeGSwA1YW7UEJuIeAvO8Li32mNoTwZA";  
 const GUILD_ID = "1416496222419550412"; 
 const STAFF_ROLE_ID = "1416528620750372944"; 
 const CATEGORY_ID = "1416528820428869793"; 
@@ -200,3 +200,4 @@ client.once("ready", async () => {
 // === Lancer serveur web + bot ===
 app.listen(3000, () => console.log("API du bot en ligne sur port 3000"));
 client.login(TOKEN);
+
