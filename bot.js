@@ -1,5 +1,8 @@
 // === Modules ===
-const { Client, GatewayIntentBits, Partials, EmbedBuilder, PermissionsBitField, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require("discord.js");
+const { 
+  Client, GatewayIntentBits, Partials, EmbedBuilder, PermissionsBitField, 
+  ActionRowBuilder, ButtonBuilder, ButtonStyle, StringSelectMenuBuilder 
+} = require("discord.js");
 const express = require("express");
 const bodyParser = require("body-parser");
 const cors = require("cors");
@@ -19,22 +22,20 @@ const client = new Client({
 
 // === Express App ===
 const app = express();
-
-// === Middleware ===
-app.use(cors()); // autorise toutes les origines (tu peux restreindre plus tard)
+app.use(cors());
 app.use(bodyParser.json());
 
-// === CONFIG ===
+// === Config ===
 const TOKEN = "MTQxNjc0ODMxNjg3NTU1ODkxMw.GrZNfH.IdQEh4kkeGSwA1YW7UEJuIeAvO8Li32mNoTwZA";  
 const GUILD_ID = "1416496222419550412"; 
 const STAFF_ROLE_ID = "1416528620750372944"; 
 const CATEGORY_ID = "1416528820428869793"; 
 const STOCK_CHANNEL_ID = "1416528608775901194"; 
+const ADMIN_CHANNEL_ID = "1416904307428691978"; // où sera le panel
 
-// === Stock file ===
 const STOCK_FILE = path.join(__dirname, "stock.json");
 
-// === Utils stock ===
+// === Utils Stock ===
 function getStock() {
     if (!fs.existsSync(STOCK_FILE)) return {};
     return JSON.parse(fs.readFileSync(STOCK_FILE, "utf8"));
@@ -63,7 +64,7 @@ async function updateStockEmbed() {
                               key === "nitro1y" ? "Nitro 1 an" :
                               key === "boost1m" ? "Nitro Boost 1 mois" :
                               "Nitro Boost 1 an";
-            embed.addFields({ name: productName, value: `Quantité disponible : **${value}**`, inline: true });
+            embed.addFields({ name: productName, value: `Quantité : **${value}**`, inline: true });
         }
 
         const messages = await channel.messages.fetch({ limit: 10 });
@@ -88,18 +89,15 @@ app.post("/order", async (req, res) => {
 
     const stock = getStock();
 
-    // Vérification stock
     for (const item of cart) {
         if (!stock[item.productId] || stock[item.productId] < item.qty) {
             return res.status(400).send(`Stock insuffisant pour ${item.name}`);
         }
     }
 
-    // Décrémenter le stock
     cart.forEach(item => stock[item.productId] -= item.qty);
     saveStock(stock);
 
-    // Créer un ticket Discord
     try {
         const guild = await client.guilds.fetch(GUILD_ID);
         const member = await guild.members.fetch(discordId);
@@ -142,7 +140,6 @@ app.post("/order", async (req, res) => {
         );
 
         await channel.send({ content: `${member}`, embeds: [embed], components: [row] });
-
         await updateStockEmbed();
         res.send("Commande envoyée !");
 
@@ -154,8 +151,52 @@ app.post("/order", async (req, res) => {
 
 // === Interaction bouton ===
 client.on("interactionCreate", async interaction => {
-    if (!interaction.isButton()) return;
-    if (interaction.customId === "close_ticket") await interaction.channel.delete();
+    if (interaction.isButton()) {
+        if (interaction.customId === "close_ticket") await interaction.channel.delete();
+    }
+
+    if (interaction.isStringSelectMenu()) {
+        // Admin stock menu
+        if (interaction.customId === "admin_stock_menu") {
+            const value = interaction.values[0]; // format: action|product|qty
+            const [action, product, qtyStr] = value.split("|");
+            const qty = parseInt(qtyStr, 10);
+            const stock = getStock();
+            if (action === "add") stock[product] = (stock[product] || 0) + qty;
+            else if (action === "remove") stock[product] = Math.max(0, (stock[product] || 0) - qty);
+            saveStock(stock);
+            await interaction.reply({ content: `Stock mis à jour pour ${product} !`, ephemeral: true });
+            await updateStockEmbed();
+        }
+    }
+});
+
+// === Commande panel admin ===
+client.on("messageCreate", async message => {
+    if (message.content === "!panel" && message.member.roles.cache.has(STAFF_ROLE_ID)) {
+        const stock = getStock();
+        const embed = new EmbedBuilder()
+            .setTitle("🛠 Panel Admin Stock")
+            .setColor(0xffd700)
+            .setDescription("Sélectionnez une action et un produit pour modifier le stock :\nFormat : action|produit|quantité");
+
+        const select = new StringSelectMenuBuilder()
+            .setCustomId("admin_stock_menu")
+            .setPlaceholder("Sélectionnez une action")
+            .addOptions([
+                { label: "Ajouter Nitro 1 mois", value: "add|nitro1m|1" },
+                { label: "Supprimer Nitro 1 mois", value: "remove|nitro1m|1" },
+                { label: "Ajouter Nitro 1 an", value: "add|nitro1y|1" },
+                { label: "Supprimer Nitro 1 an", value: "remove|nitro1y|1" },
+                { label: "Ajouter Boost 1 mois", value: "add|boost1m|1" },
+                { label: "Supprimer Boost 1 mois", value: "remove|boost1m|1" },
+                { label: "Ajouter Boost 1 an", value: "add|boost1y|1" },
+                { label: "Supprimer Boost 1 an", value: "remove|boost1y|1" }
+            ]);
+
+        const row = new ActionRowBuilder().addComponents(select);
+        await message.channel.send({ embeds: [embed], components: [row] });
+    }
 });
 
 // === Bot ready ===
@@ -165,7 +206,7 @@ client.once("ready", async () => {
     setInterval(updateStockEmbed, 10000);
 });
 
-// === Lancer serveur + bot ===
+// === Serveur web ===
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`API du bot en ligne sur port ${PORT}`));
 client.login(TOKEN);
