@@ -4,7 +4,6 @@ const path = require("path");
 const express = require("express");
 const cors = require("cors");
 const bodyParser = require("body-parser");
-const fetch = require("node-fetch"); // si Node <18
 const {
   Client,
   GatewayIntentBits,
@@ -42,6 +41,10 @@ const STOCK_FILE = path.join(__dirname, "stock.json");
 const PRICES_FILE = path.join(__dirname, "prices.json");
 const STATE_FILE = path.join(__dirname, "state.json");
 
+// Crée les fichiers si inexistants
+if (!fs.existsSync(STOCK_FILE)) fs.writeFileSync(STOCK_FILE, JSON.stringify({ nitro1m:10, nitro1y:5, boost1m:8, boost1y:3 }, null, 2));
+if (!fs.existsSync(PRICES_FILE)) fs.writeFileSync(PRICES_FILE, JSON.stringify({ nitro1m:1.5, nitro1y:10, boost1m:3.5, boost1y:30 }, null, 2));
+
 // --- State helpers ---
 function loadState() {
   try { return JSON.parse(fs.readFileSync(STATE_FILE, "utf8")); }
@@ -62,10 +65,10 @@ function savePrices(p){ fs.writeFileSync(PRICES_FILE, JSON.stringify(p,null,2),"
 
 // --- Product meta ---
 const PRODUCTS = {
-  nitro1m: { name: "Nitro 1 mois", img: `${NETLIFY_ORIGIN}/Assets/nitro1.png` },
-  nitro1y: { name: "Nitro 1 an", img: `${NETLIFY_ORIGIN}/Assets/nitro2.png` },
-  boost1m: { name: "Nitro Boost 1 mois", img: `${NETLIFY_ORIGIN}/Assets/nitro3t.png` },
-  boost1y: { name: "Nitro Boost 1 an", img: `${NETLIFY_ORIGIN}/Assets/nitro4.png` }
+  nitro1m: { name: "Nitro 1 mois", img: `${NETLIFY_ORIGIN}/Assets/nitro.png` },
+  nitro1y: { name: "Nitro 1 an", img: `${NETLIFY_ORIGIN}/Assets/nitro.png` },
+  boost1m: { name: "Nitro Boost 1 mois", img: `${NETLIFY_ORIGIN}/Assets/nitroboost.png` },
+  boost1y: { name: "Nitro Boost 1 an", img: `${NETLIFY_ORIGIN}/Assets/nitroboost.png` }
 };
 
 // --- Express ---
@@ -130,8 +133,7 @@ const client = new Client({
 });
 
 // --- Fonctions bot ---
-
-async function updateStockEmbed(){
+async function updateStockEmbed() {
   const stock = getStock();
   const prices = getPrices();
   try {
@@ -152,19 +154,35 @@ async function updateStockEmbed(){
         value: `Prix: **${prices[key] ?? "N/A"}€**\nStock: **${stock[key] ?? 0}**`,
         inline: true
       });
-      if (!embed.data.thumbnail) embed.setThumbnail(p.img); // image du premier produit
+      if (!embed.data.thumbnail) embed.setThumbnail(p.img);
     }
 
+    // --- Récupérer le message existant
+    let msg = null;
     if (stockMessageId) {
-      const msg = await channel.messages.fetch(stockMessageId).catch(()=>null);
-      if (msg) { await msg.edit({ embeds:[embed] }); return; }
+      msg = await channel.messages.fetch(stockMessageId).catch(()=>null);
     }
-    const m = await channel.send({ embeds:[embed] });
-    stockMessageId = m.id;
+
+    // Si aucun message existant n'est trouvé, chercher le dernier message du bot dans ce canal
+    if (!msg) {
+      const messages = await channel.messages.fetch({ limit: 50 });
+      msg = messages.find(m => m.author.id === client.user.id && m.embeds.length > 0);
+    }
+
+    if (msg) {
+      await msg.edit({ embeds: [embed] });
+      stockMessageId = msg.id;
+    } else {
+      const m = await channel.send({ embeds: [embed] });
+      stockMessageId = m.id;
+    }
+
     state.stockMessageId = stockMessageId;
     saveState(state);
 
-  } catch(e){ console.error("updateStockEmbed error", e); }
+  } catch (e) {
+    console.error("updateStockEmbed error", e);
+  }
 }
 
 async function ensureAdminPanel(){
@@ -222,7 +240,6 @@ client.on("interactionCreate", async (interaction) => {
     }
 
     if (interaction.isStringSelectMenu() && interaction.customId === "admin_select_action") {
-      await interaction.deferUpdate(); // ⚠️ Acknowledge interaction before showing modal
       const value = interaction.values[0];
       const [action, ...rest] = value.split("_");
       const productId = rest.join("_");
@@ -236,81 +253,68 @@ client.on("interactionCreate", async (interaction) => {
         .setRequired(true)
         .setPlaceholder(action==="price"?"Ex: 3.50":"Ex: 1");
       modal.addComponents(new ActionRowBuilder().addComponents(input));
-      await interaction.showModal(modal);
+      if (!interaction.replied && !interaction.deferred) await interaction.showModal(modal);
       return;
     }
 
     if (interaction.type === InteractionType.ModalSubmit) {
-      const id = interaction.customId;
-      if (!id.startsWith("admin_modal_")) return;
-      const parts = id.split("_");
+      if (!interaction.customId.startsWith("admin_modal_")) return;
+      const parts = interaction.customId.split("_");
       const action = parts[2];
       const productId = parts.slice(3).join("_");
       const member = await interaction.guild?.members.fetch(interaction.user.id).catch(()=>null);
-      if (!member) { if(!interaction.replied && !interaction.deferred) await interaction.reply({ content: "Erreur permissions.", flags: 64 }); return; }
+      if (!member) { if(!interaction.replied) await interaction.reply({ content: "Erreur permissions.", flags: 64 }); return; }
       if (!member.roles.cache.has(STAFF_ROLE_ID) && !member.permissions.has("ManageGuild")) {
-        if(!interaction.replied && !interaction.deferred) await interaction.reply({ content: "Tu n'as pas la permission.", flags: 64 });
+        if(!interaction.replied) await interaction.reply({ content: "Tu n'as pas la permission.", flags: 64 });
         return;
       }
 
       const value = interaction.fields.getTextInputValue("value_input").trim();
       if (action === "price") {
-        const num = parseFloat(value.replace(",",".")) ;
-        if (isNaN(num) || num < 0) { if(!interaction.replied && !interaction.deferred) await interaction.reply({ content: "Prix invalide.", flags: 64 }); return; }
+        const num = parseFloat(value.replace(",",".")); 
+        if (isNaN(num) || num < 0) { if(!interaction.replied) await interaction.reply({ content: "Prix invalide.", flags: 64 }); return; }
         const prices = getPrices(); prices[productId] = num; savePrices(prices);
-        if(!interaction.replied && !interaction.deferred) await interaction.reply({ content: `Prix de ${PRODUCTS[productId].name} mis à ${num}€`, flags: 64 });
+        if(!interaction.replied) await interaction.reply({ content: `Prix de ${PRODUCTS[productId].name} mis à ${num}€`, flags: 64 });
         await updateStockEmbed();
       } else if (action === "add" || action === "remove") {
         const qty = parseInt(value,10);
-        if (isNaN(qty) || qty <= 0) { if(!interaction.replied && !interaction.deferred) await interaction.reply({ content: "Quantité invalide.", flags: 64 }); return; }
+        if (isNaN(qty) || qty <= 0) { if(!interaction.replied) await interaction.reply({ content: "Quantité invalide.", flags: 64 }); return; }
         const stock = getStock();
         stock[productId] = (stock[productId] || 0) + (action==="add"?qty:-qty);
         if (stock[productId] < 0) stock[productId] = 0;
         saveStock(stock);
-        if(!interaction.replied && !interaction.deferred) await interaction.reply({ content: `${action==="add"?"Ajouté":"Retiré"} ${qty} à ${PRODUCTS[productId].name}. Nouveau stock: ${stock[productId]}`, flags: 64 });
+        if(!interaction.replied) await interaction.reply({ content: `${action==="add"?"Ajouté":"Retiré"} ${qty} à ${PRODUCTS[productId].name}. Nouveau stock: ${stock[productId]}`, flags: 64 });
         await updateStockEmbed();
       }
     }
+
   } catch (err) {
     console.error("interactionCreate error", err);
-    try { 
-      if (!interaction.replied && !interaction.deferred) await interaction.reply({ content: "Erreur interne.", flags: 64 }); 
-    } catch(e){}
+    try { if (!interaction.replied) await interaction.reply({ content: "Erreur interne.", flags: 64 }); } catch(e){}
   }
 });
 
-// --- Commande embed ---
-const STAFF_MENTION = `<@&${STAFF_ROLE_ID}>`;
+// --- Commande notification améliorée ---
+async function notifyOrder({ cart, discordId, username, ticketChannel }) {
+  const guild = await client.guilds.fetch(GUILD_ID);
+  const member = await guild.members.fetch(discordId).catch(()=>null);
+  const staffMention = `<@&${STAFF_ROLE_ID}>`;
+  const userMention = member ? `<@${member.id}>` : username;
 
-async function notifyOrder(order){
-  try {
-    const guild = await client.guilds.fetch(GUILD_ID);
-    const member = await guild.members.fetch(order.discordId).catch(()=>null);
-    if (!member) return;
-    if (!ORDERS_CHANNEL_ID) return;
+  let total = 0;
+  const lines = cart.map(it => {
+    const lineTotal = (it.price ?? 0) * it.qty;
+    total += lineTotal;
+    return `**${PRODUCTS[it.productId].name}** x${it.qty} — ${lineTotal}€`;
+  });
 
-    const channel = await guild.channels.fetch(ORDERS_CHANNEL_ID);
-    const embed = new EmbedBuilder()
-      .setTitle("🛒 Nouvelle commande")
-      .setDescription(`Commande de ${member}\n${STAFF_MENTION}`)
-      .setColor(0x00ff00)
-      .setTimestamp();
+  const embed = new EmbedBuilder()
+    .setTitle("🛒 Nouvelle commande")
+    .setDescription(`${userMention}, merci pour ta commande !\n\n${lines.join("\n")}\n\n**Total : ${total}€**\n\n${staffMention}, veuillez traiter cette commande.`)
+    .setColor(0x00ff00)
+    .setTimestamp();
 
-    let total = 0;
-    const lines = order.cart.map(it=>{
-      const price = it.price * it.qty;
-      total += price;
-      return `${PRODUCTS[it.productId]?.name || it.productId} x${it.qty} — **${price.toFixed(2)}€**`;
-    });
-
-    embed.addFields(
-      { name: "Détails de la commande", value: lines.join("\n") },
-      { name: "Total", value: `**${total.toFixed(2)}€**` },
-      { name: "Étapes suivantes", value: `Merci pour votre commande ! Un membre du staff va vous contacter pour finaliser le paiement et la livraison.` }
-    );
-
-    await channel.send({ embeds:[embed] });
-  } catch(e){ console.error("notifyOrder error", e); }
+  await ticketChannel.send({ content: `${userMention}`, embeds: [embed] });
 }
 
 // --- Ready & Start ---
