@@ -27,9 +27,6 @@ const STOCK_CHANNEL_ID = process.env.STOCK_CHANNEL_ID;
 const ADMIN_CHANNEL_ID = process.env.ADMIN_CHANNEL_ID;
 const ORDERS_CHANNEL_ID = process.env.ORDERS_CHANNEL_ID || null;
 
-const CLIENT_ID = process.env.CLIENT_ID;
-const CLIENT_SECRET = process.env.CLIENT_SECRET;
-const REDIRECT_URI = process.env.REDIRECT_URI;
 const NETLIFY_ORIGIN = process.env.NETLIFY_ORIGIN || "https://zikoshop.netlify.app";
 const API_SECRET = process.env.API_SECRET || null;
 const PORT = process.env.PORT || 3000;
@@ -69,10 +66,10 @@ function savePrices(p){ fs.writeFileSync(PRICES_FILE, JSON.stringify(p,null,2),"
 
 // --- Product meta ---
 const PRODUCTS = {
-  nitro1m: { name: "Nitro 1 mois", img: `${NETLIFY_ORIGIN}/Assets/nitro.png` },
-  nitro1y: { name: "Nitro 1 an", img: `${NETLIFY_ORIGIN}/Assets/nitro.png` },
-  boost1m: { name: "Nitro Boost 1 mois", img: `${NETLIFY_ORIGIN}/Assets/nitroboost.png` },
-  boost1y: { name: "Nitro Boost 1 an", img: `${NETLIFY_ORIGIN}/Assets/nitroboost.png` }
+  nitro1m: { name: "Nitro 1 mois", img: `${NETLIFY_ORIGIN}/Assets/nitro1.png` },
+  nitro1y: { name: "Nitro 1 an", img: `${NETLIFY_ORIGIN}/Assets/nitro2.png` },
+  boost1m: { name: "Nitro Boost 1 mois", img: `${NETLIFY_ORIGIN}/Assets/nitro3.png` },
+  boost1y: { name: "Nitro Boost 1 an", img: `${NETLIFY_ORIGIN}/Assets/nitro4.png` }
 };
 
 // --- Express ---
@@ -82,55 +79,6 @@ app.use(cors({ origin: NETLIFY_ORIGIN, methods: ['GET','POST','OPTIONS'], allowe
 
 app.get("/stock.json", (req,res) => res.json(getStock()));
 app.get("/prices.json", (req,res) => res.json(getPrices()));
-
-// --- OAuth Discord ---
-app.get("/login", (req,res) => {
-  if (!CLIENT_ID || !REDIRECT_URI) return res.status(500).send("OAuth non configuré");
-  const url = `https://discord.com/api/oauth2/authorize?client_id=${encodeURIComponent(CLIENT_ID)}&redirect_uri=${encodeURIComponent(REDIRECT_URI)}&response_type=code&scope=identify`;
-  return res.redirect(url);
-});
-
-app.get("/callback", async (req,res) => {
-  const code = req.query.code;
-  if (!code) return res.status(400).send("Code manquant");
-  try {
-    const tokenRes = await fetch("https://discord.com/api/oauth2/token", {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({
-        client_id: CLIENT_ID,
-        client_secret: CLIENT_SECRET,
-        grant_type: "authorization_code",
-        code,
-        redirect_uri: REDIRECT_URI,
-        scope: "identify"
-      })
-    });
-    const tokenData = await tokenRes.json();
-    if (!tokenData.access_token) return res.status(500).send("Erreur OAuth");
-
-    const userRes = await fetch("https://discord.com/api/users/@me", {
-      headers: { Authorization: `Bearer ${tokenData.access_token}` }
-    });
-    const user = await userRes.json();
-    if (!user.id) return res.status(500).send("Impossible de récupérer l'utilisateur");
-
-    const userJsonSafe = JSON.stringify(user).replace(/</g, '\\u003c');
-    const redirectTo = NETLIFY_ORIGIN.endsWith("/") ? NETLIFY_ORIGIN.slice(0,-1) : NETLIFY_ORIGIN;
-    return res.setHeader("Content-Type", "text/html").send(`
-      <!doctype html><html><head><meta charset="utf-8"><title>Connexion Discord</title></head>
-      <body>
-        <script>
-          try { localStorage.setItem("discordUser", ${userJsonSafe}); } catch(e) {}
-          window.location.href = "${redirectTo}/shop.html";
-        </script>
-      </body></html>
-    `);
-  } catch (err) {
-    console.error("Erreur /callback:", err);
-    return res.status(500).send("Erreur OAuth");
-  }
-});
 
 // --- Order API ---
 app.post("/order", async (req,res) => {
@@ -170,13 +118,7 @@ app.post("/order", async (req,res) => {
           ]
         });
 
-        const embed = new EmbedBuilder()
-          .setTitle("🛒 Nouvelle commande")
-          .setDescription(cart.map(c => `${PRODUCTS[c.productId].name} x${c.qty} — ${c.price*c.qty}€`).join("\n"))
-          .setFooter({ text: `Commande de ${username}` })
-          .setTimestamp();
-
-        await ticketChannel.send({ embeds: [embed] });
+        await notifyOrder({ cart, discordId, username, ticketChannel });
       }
     } catch(e){ console.error("notify orders failed", e); }
   })();
@@ -192,6 +134,7 @@ const client = new Client({
 });
 
 // --- Fonctions bot ---
+
 async function updateStockEmbed(){
   const stock = getStock();
   const prices = getPrices();
@@ -203,17 +146,18 @@ async function updateStockEmbed(){
     const embed = new EmbedBuilder()
       .setTitle("📦 Stock actuel des produits")
       .setColor(0xff0000)
-      .setDescription("Produits disponibles (prix + stock)")
       .setTimestamp()
       .setFooter({ text: "ZIKO SHOP" });
 
-    let firstImage = null;
     for (const key of Object.keys(PRODUCTS)) {
       const p = PRODUCTS[key];
-      if (!firstImage) firstImage = p.img;
-      embed.addFields({ name: p.name, value: `Prix: **${prices[key] ?? "N/A"}€**\nStock: **${stock[key] ?? 0}**`, inline: true });
+      embed.addFields({
+        name: `${p.name}`,
+        value: `Prix: **${prices[key] ?? "N/A"}€**\nStock: **${stock[key] ?? 0}**`,
+        inline: true
+      });
+      if (!embed.data.thumbnail) embed.setThumbnail(p.img); // image du premier produit
     }
-    if (firstImage) embed.setThumbnail(firstImage);
 
     if (stockMessageId) {
       const msg = await channel.messages.fetch(stockMessageId).catch(()=>null);
@@ -223,6 +167,7 @@ async function updateStockEmbed(){
     stockMessageId = m.id;
     state.stockMessageId = stockMessageId;
     saveState(state);
+
   } catch(e){ console.error("updateStockEmbed error", e); }
 }
 
@@ -233,10 +178,16 @@ async function ensureAdminPanel(){
     if (!channel) throw new Error("Admin channel introuvable");
 
     const options = [];
+    const stock = getStock();
+    const prices = getPrices();
+
+    let desc = "Sélectionne une action pour gérer le stock et les prix.\n\n";
     for (const key of Object.keys(PRODUCTS)) {
-      options.push({ label: `${PRODUCTS[key].name} • Ajouter`, value: `add_${key}` });
-      options.push({ label: `${PRODUCTS[key].name} • Retirer`, value: `remove_${key}` });
-      options.push({ label: `${PRODUCTS[key].name} • Modifier prix`, value: `price_${key}` });
+      const p = PRODUCTS[key];
+      desc += `**${p.name}** — Stock: **${stock[key] ?? 0}** — Prix: **${prices[key] ?? "N/A"}€**\n`;
+      options.push({ label: `${p.name} • Ajouter`, value: `add_${key}` });
+      options.push({ label: `${p.name} • Retirer`, value: `remove_${key}` });
+      options.push({ label: `${p.name} • Modifier prix`, value: `price_${key}` });
     }
 
     const menu = new StringSelectMenuBuilder()
@@ -245,10 +196,11 @@ async function ensureAdminPanel(){
       .addOptions(options);
 
     const row = new ActionRowBuilder().addComponents(menu);
+
     const embed = new EmbedBuilder()
       .setTitle("🔧 Panel Admin — Gestion Stock & Prix")
+      .setDescription(desc)
       .setColor(0xff0000)
-      .setDescription("Sélectionne une action pour ouvrir un formulaire.")
       .setTimestamp();
 
     if (adminMessageId) {
@@ -259,6 +211,7 @@ async function ensureAdminPanel(){
     adminMessageId = m.id;
     state.adminMessageId = adminMessageId;
     saveState(state);
+
   } catch(e){ console.error("ensureAdminPanel", e); }
 }
 
@@ -304,7 +257,7 @@ client.on("interactionCreate", async (interaction) => {
 
       const value = interaction.fields.getTextInputValue("value_input").trim();
       if (action === "price") {
-        const num = parseFloat(value.replace(",","."));
+        const num = parseFloat(value.replace(",",".")) ;
         if (isNaN(num) || num < 0) { await interaction.reply({ content: "Prix invalide.", ephemeral: true }); return; }
         const prices = getPrices(); prices[productId] = num; savePrices(prices);
         await interaction.reply({ content: `Prix de ${PRODUCTS[productId].name} mis à ${num}€`, ephemeral: true });
@@ -326,10 +279,45 @@ client.on("interactionCreate", async (interaction) => {
   }
 });
 
+// --- Commande embed ---
+const STAFF_MENTION = `<@&${STAFF_ROLE_ID}>`;
+
+async function notifyOrder(order){
+  try {
+    const guild = await client.guilds.fetch(GUILD_ID);
+    const member = await guild.members.fetch(order.discordId).catch(()=>null);
+    if (!member) return;
+    if (!ORDERS_CHANNEL_ID) return;
+
+    const channel = await guild.channels.fetch(ORDERS_CHANNEL_ID);
+    const embed = new EmbedBuilder()
+      .setTitle("🛒 Nouvelle commande")
+      .setDescription(`Commande de ${member}\n${STAFF_MENTION}`)
+      .setColor(0x00ff00)
+      .setTimestamp();
+
+    let total = 0;
+    const lines = order.cart.map(it=>{
+      const price = it.price * it.qty;
+      total += price;
+      return `${PRODUCTS[it.productId]?.name || it.productId} x${it.qty} — **${price.toFixed(2)}€**`;
+    });
+
+    embed.addFields(
+      { name: "Détails de la commande", value: lines.join("\n") },
+      { name: "Total", value: `**${total.toFixed(2)}€**` },
+      { name: "Étapes suivantes", value: `Merci pour votre commande ! Un membre du staff va vous contacter pour finaliser le paiement et la livraison.` }
+    );
+
+    await channel.send({ embeds:[embed] });
+  } catch(e){ console.error("notifyOrder error", e); }
+}
+
 // --- Ready & Start ---
 client.once("ready", async () => {
   console.log(`Bot prêt: ${client.user.tag}`);
   await updateStockEmbed();
+  await ensureAdminPanel();
   setInterval(async ()=>{ await updateStockEmbed(); }, 10000);
 });
 
