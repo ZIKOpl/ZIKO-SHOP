@@ -25,7 +25,6 @@ const CATEGORY_ID = process.env.CATEGORY_ID;
 const STOCK_CHANNEL_ID = process.env.STOCK_CHANNEL_ID;
 const ADMIN_CHANNEL_ID = process.env.ADMIN_CHANNEL_ID;
 const ORDERS_CHANNEL_ID = process.env.ORDERS_CHANNEL_ID || null;
-
 const NETLIFY_ORIGIN = process.env.NETLIFY_ORIGIN || "https://zikoshop.netlify.app";
 const API_SECRET = process.env.API_SECRET || null;
 const PORT = process.env.PORT || 3000;
@@ -41,18 +40,13 @@ const STOCK_FILE = path.join(__dirname, "stock.json");
 const PRICES_FILE = path.join(__dirname, "prices.json");
 const STATE_FILE = path.join(__dirname, "state.json");
 
-// Crée les fichiers si inexistants
+// Création des fichiers si inexistants
 if (!fs.existsSync(STOCK_FILE)) fs.writeFileSync(STOCK_FILE, JSON.stringify({ nitro1m:10, nitro1y:5, boost1m:8, boost1y:3 }, null, 2));
 if (!fs.existsSync(PRICES_FILE)) fs.writeFileSync(PRICES_FILE, JSON.stringify({ nitro1m:1.5, nitro1y:10, boost1m:3.5, boost1y:30 }, null, 2));
 
 // --- State helpers ---
-function loadState() {
-  try { return JSON.parse(fs.readFileSync(STATE_FILE, "utf8")); }
-  catch(e){ return {}; }
-}
-function saveState(s) {
-  fs.writeFileSync(STATE_FILE, JSON.stringify(s,null,2), "utf8");
-}
+function loadState() { try { return JSON.parse(fs.readFileSync(STATE_FILE, "utf8")); } catch(e){ return {}; } }
+function saveState(s) { fs.writeFileSync(STATE_FILE, JSON.stringify(s,null,2), "utf8"); }
 let state = loadState();
 let stockMessageId = state.stockMessageId || null;
 let adminMessageId = state.adminMessageId || null;
@@ -97,18 +91,15 @@ app.post("/order", async (req,res) => {
   cart.forEach(it => stock[it.productId] -= it.qty);
   saveStock(stock);
 
-  // Notify orders channel & create ticket
   (async () => {
     try {
       if (ORDERS_CHANNEL_ID && client.isReady()) {
         const guild = await client.guilds.fetch(GUILD_ID);
         const member = await guild.members.fetch(discordId).catch(()=>null);
         if (!member) return;
-
-        // Crée le ticket
         const ticketChannel = await guild.channels.create({
           name: `commande-${username}`.replace(/\s+/g,'-'),
-          type: 0, // text channel
+          type: 0,
           parent: CATEGORY_ID,
           permissionOverwrites: [
             { id: member.id, allow: ['ViewChannel', 'SendMessages'] },
@@ -116,7 +107,6 @@ app.post("/order", async (req,res) => {
             { id: guild.roles.everyone, deny: ['ViewChannel'] }
           ]
         });
-
         await notifyOrder({ cart, discordId, username, ticketChannel });
       }
     } catch(e){ console.error("notify orders failed", e); }
@@ -150,25 +140,22 @@ async function updateStockEmbed() {
     for (const key of Object.keys(PRODUCTS)) {
       const p = PRODUCTS[key];
       embed.addFields({
-        name: `${p.name}`,
+        name: p.name,
         value: `Prix: **${prices[key] ?? "N/A"}€**\nStock: **${stock[key] ?? 0}**`,
         inline: true
       });
       if (!embed.data.thumbnail) embed.setThumbnail(p.img);
     }
 
-    // --- Récupérer le message existant
+    // Récupère le message existant
     let msg = null;
     if (stockMessageId) {
-      msg = await channel.messages.fetch(stockMessageId).catch(()=>null);
+      msg = await channel.messages.fetch(stockMessageId).catch(() => null);
     }
-
-    // Si aucun message existant n'est trouvé, chercher le dernier message du bot dans ce canal
     if (!msg) {
       const messages = await channel.messages.fetch({ limit: 50 });
       msg = messages.find(m => m.author.id === client.user.id && m.embeds.length > 0);
     }
-
     if (msg) {
       await msg.edit({ embeds: [embed] });
       stockMessageId = msg.id;
@@ -176,7 +163,6 @@ async function updateStockEmbed() {
       const m = await channel.send({ embeds: [embed] });
       stockMessageId = m.id;
     }
-
     state.stockMessageId = stockMessageId;
     saveState(state);
 
@@ -253,7 +239,8 @@ client.on("interactionCreate", async (interaction) => {
         .setRequired(true)
         .setPlaceholder(action==="price"?"Ex: 3.50":"Ex: 1");
       modal.addComponents(new ActionRowBuilder().addComponents(input));
-      if (!interaction.replied && !interaction.deferred) await interaction.showModal(modal);
+
+      if (!interaction.deferred && !interaction.replied) await interaction.showModal(modal);
       return;
     }
 
@@ -287,7 +274,6 @@ client.on("interactionCreate", async (interaction) => {
         await updateStockEmbed();
       }
     }
-
   } catch (err) {
     console.error("interactionCreate error", err);
     try { if (!interaction.replied) await interaction.reply({ content: "Erreur interne.", flags: 64 }); } catch(e){}
