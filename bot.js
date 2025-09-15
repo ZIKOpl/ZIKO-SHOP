@@ -148,20 +148,20 @@ async function updateStockEmbed() {
       if (!embed.data.thumbnail) embed.setThumbnail(p.img5);
     }
 
-    // Récupère ou envoie le message
-    let msg = null;
-    if (stockMessageId) msg = await channel.messages.fetch(stockMessageId).catch(() => null);
-    if (!msg) {
-      const messages = await channel.messages.fetch({ limit: 50 });
-      msg = messages.find(m => m.author.id === client.user.id && m.embeds.length > 0);
-    }
-    if (msg) await msg.edit({ embeds: [embed] });
-    else { const m = await channel.send({ embeds: [embed] }); stockMessageId = m.id; }
-
+  // On met à jour UNIQUEMENT le message stock principal
+  let msg = null;
+  if (stockMessageId) {
+    msg = await channel.messages.fetch(stockMessageId).catch(() => null);
+  }
+  
+  if (msg) {
+    await msg.edit({ embeds: [embed] });
+  } else {
+    const m = await channel.send({ embeds: [embed] });
+    stockMessageId = m.id;
     state.stockMessageId = stockMessageId;
     saveState(state);
-  } catch (e) { console.error("updateStockEmbed error", e); }
-}
+  }
 
 // Admin embed simplifié
 async function ensureAdminPanel(){
@@ -382,3 +382,4 @@ client.once("ready", async () => {
 // Serveur Express
 app.listen(PORT, ()=> console.log(`API en ligne sur port ${PORT}`));
 client.login(DISCORD_TOKEN).catch(err => { console.error("Erreur login Discord:", err); process.exit(1); });
+
