@@ -1,11 +1,10 @@
-// bot.js (COMPLET – corrigé CORS pour Netlify)
+// bot.js
 const fs = require("fs");
 const path = require("path");
 const express = require("express");
 const cors = require("cors");
 const bodyParser = require("body-parser");
 const fetch = require("node-fetch"); // si Node <18
-
 const {
   Client,
   GatewayIntentBits,
@@ -79,11 +78,8 @@ const PRODUCTS = {
 // --- Express ---
 const app = express();
 app.use(bodyParser.json());
-
-// ⚡ CORS configuré pour Netlify
 app.use(cors({ origin: NETLIFY_ORIGIN, methods: ['GET','POST','OPTIONS'], allowedHeaders: ['Content-Type','x-api-key'] }));
 
-// --- Routes publiques ---
 app.get("/stock.json", (req,res) => res.json(getStock()));
 app.get("/prices.json", (req,res) => res.json(getPrices()));
 
@@ -154,20 +150,33 @@ app.post("/order", async (req,res) => {
   cart.forEach(it => stock[it.productId] -= it.qty);
   saveStock(stock);
 
-  // Notify orders channel
+  // Notify orders channel & create ticket
   (async () => {
     try {
       if (ORDERS_CHANNEL_ID && client.isReady()) {
-        const ch = await client.channels.fetch(ORDERS_CHANNEL_ID).catch(()=>null);
-        if (ch) {
-          const embed = new EmbedBuilder()
-            .setTitle("🛒 Nouvelle commande")
-            .setColor(0xff0000)
-            .setDescription(`Commande de ${username} (${discordId})`)
-            .addFields(...cart.map(c => ({ name: PRODUCTS[c.productId]?.name || c.name, value: `Qty ${c.qty} — ${c.price*c.qty}€` })))
-            .setTimestamp();
-          ch.send({ embeds: [embed] }).catch(()=>{});
-        }
+        const guild = await client.guilds.fetch(GUILD_ID);
+        const member = await guild.members.fetch(discordId).catch(()=>null);
+        if (!member) return;
+
+        // Crée le ticket
+        const ticketChannel = await guild.channels.create({
+          name: `commande-${username}`.replace(/\s+/g,'-'),
+          type: 0, // text channel
+          parent: CATEGORY_ID,
+          permissionOverwrites: [
+            { id: member.id, allow: ['ViewChannel', 'SendMessages'] },
+            { id: STAFF_ROLE_ID, allow: ['ViewChannel','SendMessages'] },
+            { id: guild.roles.everyone, deny: ['ViewChannel'] }
+          ]
+        });
+
+        const embed = new EmbedBuilder()
+          .setTitle("🛒 Nouvelle commande")
+          .setDescription(cart.map(c => `${PRODUCTS[c.productId].name} x${c.qty} — ${c.price*c.qty}€`).join("\n"))
+          .setFooter({ text: `Commande de ${username}` })
+          .setTimestamp();
+
+        await ticketChannel.send({ embeds: [embed] });
       }
     } catch(e){ console.error("notify orders failed", e); }
   })();
@@ -321,8 +330,7 @@ client.on("interactionCreate", async (interaction) => {
 client.once("ready", async () => {
   console.log(`Bot prêt: ${client.user.tag}`);
   await updateStockEmbed();
-  await ensureAdminPanel();
-  setInterval(async ()=>{ await updateStockEmbed(); await ensureAdminPanel(); }, 10000);
+  setInterval(async ()=>{ await updateStockEmbed(); }, 10000);
 });
 
 // --- Start serveur Express ---
