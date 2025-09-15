@@ -59,11 +59,11 @@ function savePrices(p){ fs.writeFileSync(PRICES_FILE, JSON.stringify(p,null,2),"
 
 // --- Product meta ---
 const PRODUCTS = {
-  nitro1m: { name: "Nitro 1 mois", img1: `${NETLIFY_ORIGIN}/Assets/nitro1.png` },
-  nitro1y: { name: "Nitro 1 an", img2: `${NETLIFY_ORIGIN}/Assets/nitro2.png` },
-  boost1m: { name: "Nitro Boost 1 mois", img3: `${NETLIFY_ORIGIN}/Assets/nitro3.png` },
-  boost1y: { name: "Nitro Boost 1 an", img4: `${NETLIFY_ORIGIN}/Assets/nitro4.png` },
-  serv14b: { name: "Serveur Discord avec 14 Boost", img5: `${NETLIFY_ORIGIN}/Assets/boost.png` }
+  nitro1m: { name: "Nitro 1 mois", img: `${NETLIFY_ORIGIN}/Assets/nitro1.png` },
+  nitro1y: { name: "Nitro 1 an", img: `${NETLIFY_ORIGIN}/Assets/nitro2.png` },
+  boost1m: { name: "Nitro Boost 1 mois", img: `${NETLIFY_ORIGIN}/Assets/nitro3.png` },
+  boost1y: { name: "Nitro Boost 1 an", img: `${NETLIFY_ORIGIN}/Assets/nitro4.png` },
+  serv14b: { name: "Serveur Discord avec 14 Boost", img: `${NETLIFY_ORIGIN}/Assets/boost.png` }
 };
 
 // --- Express ---
@@ -146,7 +146,7 @@ async function updateStockEmbed() {
         value: `💰 ${prices[key] ?? "N/A"}€\n📦 ${stock[key] ?? 0}`,
         inline: true
       });
-      if (!embed.data.thumbnail) embed.setThumbnail(p.img4);
+      if (!embed.data.thumbnail) embed.setThumbnail(p.img);
     }
 
     // Récupère ou envoie le message
@@ -311,6 +311,7 @@ client.once("ready", async () => {
 // Serveur Express
 app.listen(PORT, ()=> console.log(`API en ligne sur port ${PORT}`));
 client.login(DISCORD_TOKEN).catch(err => { console.error("Erreur login Discord:", err); process.exit(1); });
+
 
 
 
