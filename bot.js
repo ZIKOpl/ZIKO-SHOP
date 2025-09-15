@@ -1,5 +1,4 @@
-// bot.js (COMPLET — OAuth callback + API + admin panel + stock embed)
-// Requirements: Node 18+ (fetch builtin). If older Node, install node-fetch.
+// bot.js (COMPLET — avec gestion state.json pour ne pas recréer les embeds à chaque fois)
 
 const fs = require("fs");
 const path = require("path");
@@ -12,7 +11,6 @@ const {
   GatewayIntentBits,
   Partials,
   EmbedBuilder,
-  PermissionsBitField,
   ActionRowBuilder,
   ButtonBuilder,
   ButtonStyle,
@@ -23,7 +21,7 @@ const {
   InteractionType
 } = require("discord.js");
 
-// --- ENV (à configurer dans Render / ton hébergeur) ---
+// --- ENV (à configurer sur Render / hébergeur) ---
 const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
 const GUILD_ID = process.env.GUILD_ID;
 const STAFF_ROLE_ID = process.env.STAFF_ROLE_ID;
@@ -32,33 +30,46 @@ const STOCK_CHANNEL_ID = process.env.STOCK_CHANNEL_ID;
 const ADMIN_CHANNEL_ID = process.env.ADMIN_CHANNEL_ID;
 const ORDERS_CHANNEL_ID = process.env.ORDERS_CHANNEL_ID || null;
 
-const CLIENT_ID = process.env.CLIENT_ID;           // OAuth2 client id
-const CLIENT_SECRET = process.env.CLIENT_SECRET;   // OAuth2 client secret
-const REDIRECT_URI = process.env.REDIRECT_URI;     // Must match Discord app redirect
+const CLIENT_ID = process.env.CLIENT_ID;
+const CLIENT_SECRET = process.env.CLIENT_SECRET;
+const REDIRECT_URI = process.env.REDIRECT_URI;
 const NETLIFY_ORIGIN = process.env.NETLIFY_ORIGIN || "https://zikoshop.netlify.app";
 const API_SECRET = process.env.API_SECRET || null;
 const PORT = process.env.PORT || 3000;
 
 if (!DISCORD_TOKEN || !GUILD_ID || !STAFF_ROLE_ID || !CATEGORY_ID || !STOCK_CHANNEL_ID || !ADMIN_CHANNEL_ID) {
-  console.error("❌ Variables d'environnement manquantes. Vérifie DISCORD_TOKEN, GUILD_ID, STAFF_ROLE_ID, CATEGORY_ID, STOCK_CHANNEL_ID, ADMIN_CHANNEL_ID");
+  console.error("❌ Variables d'environnement manquantes !");
   process.exit(1);
 }
 
-// --- files ---
+// --- Files ---
 const STOCK_FILE = path.join(__dirname, "stock.json");
 const PRICES_FILE = path.join(__dirname, "prices.json");
+const STATE_FILE = path.join(__dirname, "state.json");
 
 // create defaults if missing
 if (!fs.existsSync(STOCK_FILE)) fs.writeFileSync(STOCK_FILE, JSON.stringify({ nitro1m:10, nitro1y:5, boost1m:8, boost1y:3 }, null, 2));
 if (!fs.existsSync(PRICES_FILE)) fs.writeFileSync(PRICES_FILE, JSON.stringify({ nitro1m:1.5, nitro1y:10, boost1m:3.5, boost1y:30 }, null, 2));
 
-// --- helpers ---
+// state.json helpers
+function loadState() {
+  try { return JSON.parse(fs.readFileSync(STATE_FILE, "utf8")); }
+  catch(e){ return {}; }
+}
+function saveState(s) {
+  fs.writeFileSync(STATE_FILE, JSON.stringify(s,null,2), "utf8");
+}
+let state = loadState();
+let stockMessageId = state.stockMessageId || null;
+let adminMessageId = state.adminMessageId || null;
+
+// stock helpers
 function getStock(){ try { return JSON.parse(fs.readFileSync(STOCK_FILE,"utf8")); } catch(e){ return {}; } }
 function saveStock(s){ fs.writeFileSync(STOCK_FILE, JSON.stringify(s,null,2),"utf8"); }
 function getPrices(){ try { return JSON.parse(fs.readFileSync(PRICES_FILE,"utf8")); } catch(e){ return {}; } }
 function savePrices(p){ fs.writeFileSync(PRICES_FILE, JSON.stringify(p,null,2),"utf8"); }
 
-// product meta (images sur Netlify)
+// product meta
 const PRODUCTS = {
   nitro1m: { name: "Nitro 1 mois", img: "https://zikoshop.netlify.app/Assets/nitro.png" },
   nitro1y: { name: "Nitro 1 an", img: "https://zikoshop.netlify.app/Assets/nitro.png" },
@@ -69,29 +80,25 @@ const PRODUCTS = {
 // --- express ---
 const app = express();
 app.use(bodyParser.json());
-app.use(cors({ origin: NETLIFY_ORIGIN })); // autorise ton front seulement
+app.use(cors({ origin: NETLIFY_ORIGIN }));
 
-// Routes public pour le site
 app.get("/stock.json", (req,res) => res.json(getStock()));
 app.get("/prices.json", (req,res) => res.json(getPrices()));
 
-// Simple route /login pour démarrer OAuth
+// login oauth
 app.get("/login", (req,res) => {
-  if (!CLIENT_ID || !REDIRECT_URI) return res.status(500).send("OAuth non configuré (CLIENT_ID/REDIRECT_URI manquants).");
+  if (!CLIENT_ID || !REDIRECT_URI) return res.status(500).send("OAuth non configuré");
   const url = `https://discord.com/api/oauth2/authorize?client_id=${encodeURIComponent(CLIENT_ID)}&redirect_uri=${encodeURIComponent(REDIRECT_URI)}&response_type=code&scope=identify`;
   return res.redirect(url);
 });
 
-// Callback OAuth2
+// callback oauth
 app.get("/callback", async (req,res) => {
-  if (!CLIENT_ID || !CLIENT_SECRET || !REDIRECT_URI) {
-    return res.status(500).send("OAuth non configuré (CLIENT_ID/CLIENT_SECRET/REDIRECT_URI manquants).");
-  }
+  if (!CLIENT_ID || !CLIENT_SECRET || !REDIRECT_URI) return res.status(500).send("OAuth non configuré");
   const code = req.query.code;
-  if (!code) return res.status(400).send("Code manquant dans la requête.");
+  if (!code) return res.status(400).send("Code manquant");
 
   try {
-    // échange code -> token
     const tokenRes = await fetch("https://discord.com/api/oauth2/token", {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
@@ -105,51 +112,37 @@ app.get("/callback", async (req,res) => {
       })
     });
     const tokenData = await tokenRes.json();
-    if (!tokenData || !tokenData.access_token) {
-      console.error("OAuth token error:", tokenData);
-      return res.status(500).send("Impossible d'obtenir le token OAuth.");
-    }
+    if (!tokenData.access_token) return res.status(500).send("Erreur OAuth");
 
-    // récup user
     const userRes = await fetch("https://discord.com/api/users/@me", {
       headers: { Authorization: `Bearer ${tokenData.access_token}` }
     });
     const user = await userRes.json();
-    if (!user || !user.id) {
-      console.error("Erreur fetching user:", user);
-      return res.status(500).send("Impossible de récupérer l'utilisateur Discord.");
-    }
+    if (!user.id) return res.status(500).send("Impossible de récupérer l'utilisateur");
 
-    // Réponse HTML qui stocke l'user dans localStorage côté navigateur puis redirige vers ton front
     const userJsonSafe = JSON.stringify(user).replace(/</g, '\\u003c');
     const redirectTo = NETLIFY_ORIGIN.endsWith("/") ? NETLIFY_ORIGIN.slice(0,-1) : NETLIFY_ORIGIN;
     return res.setHeader("Content-Type", "text/html").send(`
       <!doctype html><html><head><meta charset="utf-8"><title>Connexion Discord</title></head>
       <body>
         <script>
-          try {
-            localStorage.setItem("discordUser", ${userJsonSafe});
-          } catch(e) { console.error(e); }
-          // redirige vers la boutique (shop.html)
+          try { localStorage.setItem("discordUser", ${userJsonSafe}); } catch(e) {}
           window.location.href = "${redirectTo}/shop.html";
         </script>
-        <p>Redirection… Si rien ne se passe, <a href="${redirectTo}/shop.html">clique ici</a>.</p>
       </body></html>
     `);
-
   } catch (err) {
     console.error("Erreur /callback:", err);
-    return res.status(500).send("Erreur lors de l'authentification OAuth.");
+    return res.status(500).send("Erreur OAuth");
   }
 });
 
-// POST /order endpoint (protégé si API_SECRET)
+// order API
 app.post("/order", async (req,res) => {
   if (API_SECRET) {
     const key = req.headers["x-api-key"];
     if (!key || key !== API_SECRET) return res.status(403).send("API key invalide");
   }
-
   const { username, discordId, cart } = req.body;
   if (!cart || !Array.isArray(cart) || cart.length === 0) return res.status(400).send("Panier vide");
 
@@ -159,11 +152,9 @@ app.post("/order", async (req,res) => {
       return res.status(400).send(`Stock insuffisant pour ${it.name}`);
     }
   }
-  // décrémenter
   cart.forEach(it => stock[it.productId] -= it.qty);
   saveStock(stock);
 
-  // notify orders channel (async)
   (async () => {
     try {
       if (ORDERS_CHANNEL_ID && client.isReady()) {
@@ -181,19 +172,15 @@ app.post("/order", async (req,res) => {
     } catch(e){ console.error("notify orders failed", e); }
   })();
 
-  // update discord embed stock async
   updateStockEmbed().catch(()=>{});
   return res.send("Commande traitée");
 });
 
-// --- Discord bot (admin panel + stock embed + tickets) ---
+// --- Discord bot ---
 const client = new Client({
   intents: [ GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent, GatewayIntentBits.GuildMembers ],
   partials: [Partials.Channel]
 });
-
-let stockMessageId = null;
-let adminMessageId = null;
 
 // update stock embed
 async function updateStockEmbed(){
@@ -225,10 +212,12 @@ async function updateStockEmbed(){
     }
     const m = await channel.send({ embeds:[embed] });
     stockMessageId = m.id;
+    state.stockMessageId = stockMessageId;
+    saveState(state);
   } catch(e){ console.error("updateStockEmbed error", e); }
 }
 
-// admin panel ensure
+// admin panel
 async function ensureAdminPanel(){
   try {
     const guild = await client.guilds.fetch(GUILD_ID);
@@ -242,9 +231,17 @@ async function ensureAdminPanel(){
       options.push({ label: `${PRODUCTS[key].name} • Modifier prix`, value: `price_${key}` });
     }
 
-    const menu = new StringSelectMenuBuilder().setCustomId("admin_select_action").setPlaceholder("Choisis action...").addOptions(options);
+    const menu = new StringSelectMenuBuilder()
+      .setCustomId("admin_select_action")
+      .setPlaceholder("Choisis action...")
+      .addOptions(options);
+
     const row = new ActionRowBuilder().addComponents(menu);
-    const embed = new EmbedBuilder().setTitle("🔧 Panel Admin — Gestion Stock & Prix").setColor(0xff0000).setDescription("Sélectionne une action pour ouvrir un formulaire.").setTimestamp();
+    const embed = new EmbedBuilder()
+      .setTitle("🔧 Panel Admin — Gestion Stock & Prix")
+      .setColor(0xff0000)
+      .setDescription("Sélectionne une action pour ouvrir un formulaire.")
+      .setTimestamp();
 
     if (adminMessageId) {
       const existing = await channel.messages.fetch(adminMessageId).catch(()=>null);
@@ -252,6 +249,8 @@ async function ensureAdminPanel(){
     }
     const m = await channel.send({ embeds:[embed], components:[row] });
     adminMessageId = m.id;
+    state.adminMessageId = adminMessageId;
+    saveState(state);
   } catch(e){ console.error("ensureAdminPanel", e); }
 }
 
@@ -267,21 +266,28 @@ client.on("interactionCreate", async (interaction) => {
     }
 
     if (interaction.isStringSelectMenu() && interaction.customId === "admin_select_action") {
-      const value = interaction.values[0]; // ex "add_nitro1m"
+      const value = interaction.values[0];
       const [action, ...rest] = value.split("_");
       const productId = rest.join("_");
-      const modal = new ModalBuilder().setCustomId(`admin_modal_${action}_${productId}`).setTitle(`${action==="price"?"Modifier le prix": (action==="add"?"Ajouter au stock":"Retirer du stock")} — ${PRODUCTS[productId]?.name || productId}`);
-      const input = new TextInputBuilder().setCustomId("value_input").setLabel(action==="price"?"Nouveau prix":"Quantité (entier)").setStyle(TextInputStyle.Short).setRequired(true).setPlaceholder(action==="price"?"Ex: 3.50":"Ex: 1");
+      const modal = new ModalBuilder()
+        .setCustomId(`admin_modal_${action}_${productId}`)
+        .setTitle(`${action==="price"?"Modifier le prix": (action==="add"?"Ajouter au stock":"Retirer du stock")} — ${PRODUCTS[productId]?.name || productId}`);
+      const input = new TextInputBuilder()
+        .setCustomId("value_input")
+        .setLabel(action==="price"?"Nouveau prix":"Quantité (entier)")
+        .setStyle(TextInputStyle.Short)
+        .setRequired(true)
+        .setPlaceholder(action==="price"?"Ex: 3.50":"Ex: 1");
       modal.addComponents(new ActionRowBuilder().addComponents(input));
       await interaction.showModal(modal);
       return;
     }
 
     if (interaction.type === InteractionType.ModalSubmit) {
-      const id = interaction.customId; // admin_modal_add_nitro1m
+      const id = interaction.customId;
       if (!id.startsWith("admin_modal_")) return;
       const parts = id.split("_");
-      if (parts.length < 4) { await interaction.reply({ content: "Action inconnue (ID modal mal formé).", ephemeral: true }); return; }
+      if (parts.length < 4) { await interaction.reply({ content: "Action inconnue.", ephemeral: true }); return; }
       const action = parts[2];
       const productId = parts.slice(3).join("_");
       const member = await interaction.guild?.members.fetch(interaction.user.id).catch(()=>null);
