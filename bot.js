@@ -1,10 +1,10 @@
-// bot.js (COMPLET — avec gestion state.json pour ne pas recréer les embeds à chaque fois)
-
+// bot.js (COMPLET – corrigé CORS pour Netlify)
 const fs = require("fs");
 const path = require("path");
 const express = require("express");
 const cors = require("cors");
 const bodyParser = require("body-parser");
+const fetch = require("node-fetch"); // si Node <18
 
 const {
   Client,
@@ -12,8 +12,6 @@ const {
   Partials,
   EmbedBuilder,
   ActionRowBuilder,
-  ButtonBuilder,
-  ButtonStyle,
   StringSelectMenuBuilder,
   ModalBuilder,
   TextInputBuilder,
@@ -21,7 +19,7 @@ const {
   InteractionType
 } = require("discord.js");
 
-// --- ENV (à configurer sur Render / hébergeur) ---
+// --- ENV ---
 const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
 const GUILD_ID = process.env.GUILD_ID;
 const STAFF_ROLE_ID = process.env.STAFF_ROLE_ID;
@@ -37,6 +35,7 @@ const NETLIFY_ORIGIN = process.env.NETLIFY_ORIGIN || "https://zikoshop.netlify.a
 const API_SECRET = process.env.API_SECRET || null;
 const PORT = process.env.PORT || 3000;
 
+// --- Vérification ENV ---
 if (!DISCORD_TOKEN || !GUILD_ID || !STAFF_ROLE_ID || !CATEGORY_ID || !STOCK_CHANNEL_ID || !ADMIN_CHANNEL_ID) {
   console.error("❌ Variables d'environnement manquantes !");
   process.exit(1);
@@ -47,11 +46,11 @@ const STOCK_FILE = path.join(__dirname, "stock.json");
 const PRICES_FILE = path.join(__dirname, "prices.json");
 const STATE_FILE = path.join(__dirname, "state.json");
 
-// create defaults if missing
+// Crée les fichiers si inexistants
 if (!fs.existsSync(STOCK_FILE)) fs.writeFileSync(STOCK_FILE, JSON.stringify({ nitro1m:10, nitro1y:5, boost1m:8, boost1y:3 }, null, 2));
 if (!fs.existsSync(PRICES_FILE)) fs.writeFileSync(PRICES_FILE, JSON.stringify({ nitro1m:1.5, nitro1y:10, boost1m:3.5, boost1y:30 }, null, 2));
 
-// state.json helpers
+// --- State helpers ---
 function loadState() {
   try { return JSON.parse(fs.readFileSync(STATE_FILE, "utf8")); }
   catch(e){ return {}; }
@@ -63,41 +62,41 @@ let state = loadState();
 let stockMessageId = state.stockMessageId || null;
 let adminMessageId = state.adminMessageId || null;
 
-// stock helpers
+// --- Stock & Prices helpers ---
 function getStock(){ try { return JSON.parse(fs.readFileSync(STOCK_FILE,"utf8")); } catch(e){ return {}; } }
 function saveStock(s){ fs.writeFileSync(STOCK_FILE, JSON.stringify(s,null,2),"utf8"); }
 function getPrices(){ try { return JSON.parse(fs.readFileSync(PRICES_FILE,"utf8")); } catch(e){ return {}; } }
 function savePrices(p){ fs.writeFileSync(PRICES_FILE, JSON.stringify(p,null,2),"utf8"); }
 
-// product meta
+// --- Product meta ---
 const PRODUCTS = {
-  nitro1m: { name: "Nitro 1 mois", img: "https://zikoshop.netlify.app/Assets/nitro.png" },
-  nitro1y: { name: "Nitro 1 an", img: "https://zikoshop.netlify.app/Assets/nitro.png" },
-  boost1m: { name: "Nitro Boost 1 mois", img: "https://zikoshop.netlify.app/Assets/nitroboost.png" },
-  boost1y: { name: "Nitro Boost 1 an", img: "https://zikoshop.netlify.app/Assets/nitroboost.png" }
+  nitro1m: { name: "Nitro 1 mois", img: `${NETLIFY_ORIGIN}/Assets/nitro.png` },
+  nitro1y: { name: "Nitro 1 an", img: `${NETLIFY_ORIGIN}/Assets/nitro.png` },
+  boost1m: { name: "Nitro Boost 1 mois", img: `${NETLIFY_ORIGIN}/Assets/nitroboost.png` },
+  boost1y: { name: "Nitro Boost 1 an", img: `${NETLIFY_ORIGIN}/Assets/nitroboost.png` }
 };
 
-// --- express ---
+// --- Express ---
 const app = express();
 app.use(bodyParser.json());
-app.use(cors({ origin: NETLIFY_ORIGIN }));
 
+// ⚡ CORS configuré pour Netlify
+app.use(cors({ origin: NETLIFY_ORIGIN, methods: ['GET','POST','OPTIONS'], allowedHeaders: ['Content-Type','x-api-key'] }));
+
+// --- Routes publiques ---
 app.get("/stock.json", (req,res) => res.json(getStock()));
 app.get("/prices.json", (req,res) => res.json(getPrices()));
 
-// login oauth
+// --- OAuth Discord ---
 app.get("/login", (req,res) => {
   if (!CLIENT_ID || !REDIRECT_URI) return res.status(500).send("OAuth non configuré");
   const url = `https://discord.com/api/oauth2/authorize?client_id=${encodeURIComponent(CLIENT_ID)}&redirect_uri=${encodeURIComponent(REDIRECT_URI)}&response_type=code&scope=identify`;
   return res.redirect(url);
 });
 
-// callback oauth
 app.get("/callback", async (req,res) => {
-  if (!CLIENT_ID || !CLIENT_SECRET || !REDIRECT_URI) return res.status(500).send("OAuth non configuré");
   const code = req.query.code;
   if (!code) return res.status(400).send("Code manquant");
-
   try {
     const tokenRes = await fetch("https://discord.com/api/oauth2/token", {
       method: "POST",
@@ -137,7 +136,7 @@ app.get("/callback", async (req,res) => {
   }
 });
 
-// order API
+// --- Order API ---
 app.post("/order", async (req,res) => {
   if (API_SECRET) {
     const key = req.headers["x-api-key"];
@@ -155,6 +154,7 @@ app.post("/order", async (req,res) => {
   cart.forEach(it => stock[it.productId] -= it.qty);
   saveStock(stock);
 
+  // Notify orders channel
   (async () => {
     try {
       if (ORDERS_CHANNEL_ID && client.isReady()) {
@@ -176,13 +176,13 @@ app.post("/order", async (req,res) => {
   return res.send("Commande traitée");
 });
 
-// --- Discord bot ---
+// --- Discord Bot ---
 const client = new Client({
   intents: [ GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent, GatewayIntentBits.GuildMembers ],
   partials: [Partials.Channel]
 });
 
-// update stock embed
+// --- Fonctions bot ---
 async function updateStockEmbed(){
   const stock = getStock();
   const prices = getPrices();
@@ -217,7 +217,6 @@ async function updateStockEmbed(){
   } catch(e){ console.error("updateStockEmbed error", e); }
 }
 
-// admin panel
 async function ensureAdminPanel(){
   try {
     const guild = await client.guilds.fetch(GUILD_ID);
@@ -254,14 +253,12 @@ async function ensureAdminPanel(){
   } catch(e){ console.error("ensureAdminPanel", e); }
 }
 
-// interactions
+// --- Interactions ---
 client.on("interactionCreate", async (interaction) => {
   try {
-    if (interaction.isButton()) {
-      if (interaction.customId === "close_ticket") {
-        await interaction.reply({ content: "Ticket fermé.", ephemeral: true }).catch(()=>{});
-        await interaction.channel.delete().catch(()=>{});
-      }
+    if (interaction.isButton() && interaction.customId === "close_ticket") {
+      await interaction.reply({ content: "Ticket fermé.", ephemeral: true }).catch(()=>{});
+      await interaction.channel.delete().catch(()=>{});
       return;
     }
 
@@ -287,12 +284,14 @@ client.on("interactionCreate", async (interaction) => {
       const id = interaction.customId;
       if (!id.startsWith("admin_modal_")) return;
       const parts = id.split("_");
-      if (parts.length < 4) { await interaction.reply({ content: "Action inconnue.", ephemeral: true }); return; }
       const action = parts[2];
       const productId = parts.slice(3).join("_");
       const member = await interaction.guild?.members.fetch(interaction.user.id).catch(()=>null);
       if (!member) { await interaction.reply({ content: "Erreur permissions.", ephemeral: true }); return; }
-      if (!member.roles.cache.has(STAFF_ROLE_ID) && !member.permissions.has("ManageGuild")) { await interaction.reply({ content: "Tu n'as pas la permission.", ephemeral: true }); return; }
+      if (!member.roles.cache.has(STAFF_ROLE_ID) && !member.permissions.has("ManageGuild")) {
+        await interaction.reply({ content: "Tu n'as pas la permission.", ephemeral: true });
+        return;
+      }
 
       const value = interaction.fields.getTextInputValue("value_input").trim();
       if (action === "price") {
@@ -301,7 +300,6 @@ client.on("interactionCreate", async (interaction) => {
         const prices = getPrices(); prices[productId] = num; savePrices(prices);
         await interaction.reply({ content: `Prix de ${PRODUCTS[productId].name} mis à ${num}€`, ephemeral: true });
         await updateStockEmbed();
-        return;
       } else if (action === "add" || action === "remove") {
         const qty = parseInt(value,10);
         if (isNaN(qty) || qty <= 0) { await interaction.reply({ content: "Quantité invalide.", ephemeral: true }); return; }
@@ -311,9 +309,6 @@ client.on("interactionCreate", async (interaction) => {
         saveStock(stock);
         await interaction.reply({ content: `${action==="add"?"Ajouté":"Retiré"} ${qty} à ${PRODUCTS[productId].name}. Nouveau stock: ${stock[productId]}`, ephemeral: true });
         await updateStockEmbed();
-        return;
-      } else {
-        await interaction.reply({ content: "Action inconnue.", ephemeral: true });
       }
     }
   } catch (err) {
@@ -322,7 +317,7 @@ client.on("interactionCreate", async (interaction) => {
   }
 });
 
-// ready
+// --- Ready & Start ---
 client.once("ready", async () => {
   console.log(`Bot prêt: ${client.user.tag}`);
   await updateStockEmbed();
@@ -330,6 +325,6 @@ client.once("ready", async () => {
   setInterval(async ()=>{ await updateStockEmbed(); await ensureAdminPanel(); }, 10000);
 });
 
-// start
+// --- Start serveur Express ---
 app.listen(PORT, ()=> console.log(`API en ligne sur port ${PORT}`));
 client.login(DISCORD_TOKEN).catch(err => { console.error("Erreur login Discord:", err); process.exit(1); });
