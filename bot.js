@@ -59,10 +59,10 @@ function savePrices(p){ fs.writeFileSync(PRICES_FILE, JSON.stringify(p,null,2),"
 
 // --- Product meta ---
 const PRODUCTS = {
-  nitro1m: { name: "Nitro 1 mois", img: `${NETLIFY_ORIGIN}/Assets/nitro.png` },
-  nitro1y: { name: "Nitro 1 an", img: `${NETLIFY_ORIGIN}/Assets/nitro.png` },
-  boost1m: { name: "Nitro Boost 1 mois", img: `${NETLIFY_ORIGIN}/Assets/nitroboost.png` },
-  boost1y: { name: "Nitro Boost 1 an", img: `${NETLIFY_ORIGIN}/Assets/nitroboost.png` }
+  nitro1m: { name: "Nitro 1 mois", img: `${NETLIFY_ORIGIN}/Assets/nitro1.png` },
+  nitro1y: { name: "Nitro 1 an", img: `${NETLIFY_ORIGIN}/Assets/nitro2.png` },
+  boost1m: { name: "Nitro Boost 1 mois", img: `${NETLIFY_ORIGIN}/Assets/nitro3.png` },
+  boost1y: { name: "Nitro Boost 1 an", img: `${NETLIFY_ORIGIN}/Assets/nitro4.png` }
 };
 
 // --- Express ---
@@ -122,7 +122,8 @@ const client = new Client({
   partials: [Partials.Channel]
 });
 
-// --- Fonctions bot ---
+// --- Embeds ---
+// Stock embed
 async function updateStockEmbed() {
   const stock = getStock();
   const prices = getPrices();
@@ -132,95 +133,90 @@ async function updateStockEmbed() {
     if (!channel) throw new Error("Stock channel introuvable");
 
     const embed = new EmbedBuilder()
-      .setTitle("📦 Stock actuel des produits")
-      .setColor(0xff0000)
-      .setTimestamp()
-      .setFooter({ text: "ZIKO SHOP" });
+      .setTitle("📦 Stock actuel")
+      .setColor(0x0099ff)
+      .setFooter({ text: "ZIKO SHOP" })
+      .setTimestamp();
 
     for (const key of Object.keys(PRODUCTS)) {
       const p = PRODUCTS[key];
       embed.addFields({
         name: p.name,
-        value: `Prix: **${prices[key] ?? "N/A"}€**\nStock: **${stock[key] ?? 0}**`,
+        value: `💰 ${prices[key] ?? "N/A"}€\n📦 ${stock[key] ?? 0}`,
         inline: true
       });
       if (!embed.data.thumbnail) embed.setThumbnail(p.img);
     }
 
-    // Récupère le message existant
+    // Récupère ou envoie le message
     let msg = null;
-    if (stockMessageId) {
-      msg = await channel.messages.fetch(stockMessageId).catch(() => null);
-    }
+    if (stockMessageId) msg = await channel.messages.fetch(stockMessageId).catch(() => null);
     if (!msg) {
       const messages = await channel.messages.fetch({ limit: 50 });
       msg = messages.find(m => m.author.id === client.user.id && m.embeds.length > 0);
     }
-    if (msg) {
-      await msg.edit({ embeds: [embed] });
-      stockMessageId = msg.id;
-    } else {
-      const m = await channel.send({ embeds: [embed] });
-      stockMessageId = m.id;
-    }
+    if (msg) await msg.edit({ embeds: [embed] });
+    else { const m = await channel.send({ embeds: [embed] }); stockMessageId = m.id; }
+
     state.stockMessageId = stockMessageId;
     saveState(state);
-
-  } catch (e) {
-    console.error("updateStockEmbed error", e);
-  }
+  } catch (e) { console.error("updateStockEmbed error", e); }
 }
 
+// Admin embed simplifié
 async function ensureAdminPanel(){
   try {
     const guild = await client.guilds.fetch(GUILD_ID);
     const channel = await guild.channels.fetch(ADMIN_CHANNEL_ID);
     if (!channel) throw new Error("Admin channel introuvable");
 
-    const options = [];
     const stock = getStock();
     const prices = getPrices();
 
-    let desc = "Sélectionne une action pour gérer le stock et les prix.\n\n";
+    const embed = new EmbedBuilder()
+      .setTitle("🔧 Panel Admin — Stock & Prix")
+      .setColor(0xff9900)
+      .setDescription(
+        Object.keys(PRODUCTS).map(key => {
+          return `**${PRODUCTS[key].name}** — Stock: **${stock[key] ?? 0}** — Prix: **${prices[key] ?? "N/A"}€**`;
+        }).join("\n")
+      )
+      .setTimestamp();
+
+    const options = [];
     for (const key of Object.keys(PRODUCTS)) {
-      const p = PRODUCTS[key];
-      desc += `**${p.name}** — Stock: **${stock[key] ?? 0}** — Prix: **${prices[key] ?? "N/A"}€**\n`;
-      options.push({ label: `${p.name} • Ajouter`, value: `add_${key}` });
-      options.push({ label: `${p.name} • Retirer`, value: `remove_${key}` });
-      options.push({ label: `${p.name} • Modifier prix`, value: `price_${key}` });
+      options.push({ label: `Ajouter ${PRODUCTS[key].name}`, value: `add_${key}` });
+      options.push({ label: `Retirer ${PRODUCTS[key].name}`, value: `remove_${key}` });
+      options.push({ label: `Modifier prix ${PRODUCTS[key].name}`, value: `price_${key}` });
     }
 
     const menu = new StringSelectMenuBuilder()
       .setCustomId("admin_select_action")
-      .setPlaceholder("Choisis action...")
+      .setPlaceholder("Choisis une action...")
       .addOptions(options);
 
     const row = new ActionRowBuilder().addComponents(menu);
 
-    const embed = new EmbedBuilder()
-      .setTitle("🔧 Panel Admin — Gestion Stock & Prix")
-      .setDescription(desc)
-      .setColor(0xff0000)
-      .setTimestamp();
-
     if (adminMessageId) {
       const existing = await channel.messages.fetch(adminMessageId).catch(()=>null);
-      if (existing) { await existing.edit({ embeds:[embed], components:[row] }).catch(()=>{}); return; }
+      if (existing) await existing.edit({ embeds:[embed], components:[row] });
+      else { const m = await channel.send({ embeds:[embed], components:[row] }); adminMessageId = m.id; }
+    } else {
+      const m = await channel.send({ embeds:[embed], components:[row] });
+      adminMessageId = m.id;
     }
-    const m = await channel.send({ embeds:[embed], components:[row] });
-    adminMessageId = m.id;
+
     state.adminMessageId = adminMessageId;
     saveState(state);
 
   } catch(e){ console.error("ensureAdminPanel", e); }
 }
 
-// --- Interactions ---
+// Interaction
 client.on("interactionCreate", async (interaction) => {
   try {
     if (interaction.isButton() && interaction.customId === "close_ticket") {
-      if (!interaction.replied && !interaction.deferred)
-        await interaction.reply({ content: "Ticket fermé.", flags: 64 });
+      if (!interaction.replied && !interaction.deferred) await interaction.reply({ content: "Ticket fermé.", flags: 64 });
       await interaction.channel.delete().catch(()=>{});
       return;
     }
@@ -280,7 +276,7 @@ client.on("interactionCreate", async (interaction) => {
   }
 });
 
-// --- Commande notification améliorée ---
+// Notification commande
 async function notifyOrder({ cart, discordId, username, ticketChannel }) {
   const guild = await client.guilds.fetch(GUILD_ID);
   const member = await guild.members.fetch(discordId).catch(()=>null);
@@ -291,19 +287,19 @@ async function notifyOrder({ cart, discordId, username, ticketChannel }) {
   const lines = cart.map(it => {
     const lineTotal = (it.price ?? 0) * it.qty;
     total += lineTotal;
-    return `**${PRODUCTS[it.productId].name}** x${it.qty} — ${lineTotal}€`;
+    return `• **${PRODUCTS[it.productId].name}** x${it.qty} — ${lineTotal}€`;
   });
 
   const embed = new EmbedBuilder()
     .setTitle("🛒 Nouvelle commande")
-    .setDescription(`${userMention}, merci pour ta commande !\n\n${lines.join("\n")}\n\n**Total : ${total}€**\n\n${staffMention}, veuillez traiter cette commande.`)
-    .setColor(0x00ff00)
+    .setDescription(`${userMention}, merci pour ta commande !\n\n${lines.join("\n")}\n\n**Total : ${total}€**\n${staffMention} veuillez traiter la commande.`)
+    .setColor(0x00cc66)
     .setTimestamp();
 
   await ticketChannel.send({ content: `${userMention}`, embeds: [embed] });
 }
 
-// --- Ready & Start ---
+// Ready & interval
 client.once("ready", async () => {
   console.log(`Bot prêt: ${client.user.tag}`);
   await updateStockEmbed();
@@ -311,6 +307,6 @@ client.once("ready", async () => {
   setInterval(async ()=>{ await updateStockEmbed(); }, 10000);
 });
 
-// --- Start serveur Express ---
+// Serveur Express
 app.listen(PORT, ()=> console.log(`API en ligne sur port ${PORT}`));
 client.login(DISCORD_TOKEN).catch(err => { console.error("Erreur login Discord:", err); process.exit(1); });
