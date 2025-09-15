@@ -1,4 +1,3 @@
-// bot.js
 const fs = require("fs");
 const path = require("path");
 const express = require("express");
@@ -59,11 +58,11 @@ function savePrices(p){ fs.writeFileSync(PRICES_FILE, JSON.stringify(p,null,2),"
 
 // --- Product meta ---
 const PRODUCTS = {
-  nitro1m: { name: "Nitro 1 mois", img: `${NETLIFY_ORIGIN}/Assets/nitro1.png` },
-  nitro1y: { name: "Nitro 1 an", img: `${NETLIFY_ORIGIN}/Assets/nitro2.png` },
-  boost1m: { name: "Nitro Boost 1 mois", img: `${NETLIFY_ORIGIN}/Assets/nitro3.png` },
-  boost1y: { name: "Nitro Boost 1 an", img: `${NETLIFY_ORIGIN}/Assets/nitro4.png` },
-  serv14b: { name: "Serv Discord 14 Boost", img: `${NETLIFY_ORIGIN}/Assets/boost.png` }
+  nitro1m: { name: "Nitro 1 mois", img1: `${NETLIFY_ORIGIN}/Assets/nitro1.png` },
+  nitro1y: { name: "Nitro 1 an", img2: `${NETLIFY_ORIGIN}/Assets/nitro2.png` },
+  boost1m: { name: "Nitro Boost 1 mois", img3: `${NETLIFY_ORIGIN}/Assets/nitro3.png` },
+  boost1y: { name: "Nitro Boost 1 an", img4: `${NETLIFY_ORIGIN}/Assets/nitro4.png` },
+  serv14b: { name: "Serv Discord 14 Boost", img5: `${NETLIFY_ORIGIN}/Assets/boost.png` }
 };
 
 // --- Express ---
@@ -146,7 +145,7 @@ async function updateStockEmbed() {
         value: `💰 ${prices[key] ?? "N/A"}€\n📦 ${stock[key] ?? 0}`,
         inline: true
       });
-      if (!embed.data.thumbnail) embed.setThumbnail(p.img);
+      if (!embed.data.thumbnail) embed.setThumbnail(p.img5);
     }
 
     // Récupère ou envoie le message
@@ -230,7 +229,6 @@ client.on("interactionCreate", async (interaction) => {
       const [action, ...rest] = value.split("_");
       const productId = rest.join("_");
 
-      // Préparer titre court pour Discord (max 45 caractères)
       let titleText = action === "price" ? "Modifier prix" : action === "add" ? "Ajouter stock" : "Retirer stock";
       const productName = PRODUCTS[productId]?.name || productId;
       if (titleText.length + productName.length + 3 > 45) {
@@ -296,12 +294,49 @@ client.on("interactionCreate", async (interaction) => {
           if (!interaction.replied) await interaction.reply({ content: "Quantité invalide.", flags: 64 });
           return;
         }
+
+        // --- Mise à jour du stock ---
         stock[productId] = (stock[productId] || 0) + (action === "add" ? qty : -qty);
         if (stock[productId] < 0) stock[productId] = 0;
         saveStock(stock);
 
-        if (!interaction.replied) await interaction.reply({ content: `${action === "add" ? "Ajouté" : "Retiré"} ${qty} à ${PRODUCTS[productId].name}. Nouveau stock: ${stock[productId]}`, flags: 64 });
+        // --- Confirmation admin ---
+        if (!interaction.replied) {
+          await interaction.reply({ 
+            content: `${action === "add" ? "Ajouté" : "Retiré"} ${qty} à ${PRODUCTS[productId].name}. Nouveau stock: ${stock[productId]}`, 
+            flags: 64 
+          });
+        }
+
         await updateStockEmbed();
+
+        // --- Notification restock ---
+        if (action === "add" && qty > 0) {
+          try {
+            const guild = await client.guilds.fetch(GUILD_ID);
+            const stockChannel = await guild.channels.fetch(STOCK_CHANNEL_ID);
+
+            const embed = new EmbedBuilder()
+              .setTitle("📢 Nouveau Restock !")
+              .setDescription(
+                `Un nouveau produit vient d’être ajouté au stock !\n\n` +
+                `**Produit :** ${PRODUCTS[productId].name}\n` +
+                `**Quantité ajoutée :** ${qty}\n` +
+                `**Stock disponible :** ${stock[productId]}`
+              )
+              .setColor(0x00ccff)
+              .setTimestamp();
+
+            const restockMsg = await stockChannel.send({ content: "@everyone", embeds: [embed] });
+
+            setTimeout(() => {
+              restockMsg.delete().catch(() => {});
+            }, 3600000);
+
+          } catch (e) {
+            console.error("Erreur envoi message restock", e);
+          }
+        }
       }
     }
 
@@ -347,11 +382,3 @@ client.once("ready", async () => {
 // Serveur Express
 app.listen(PORT, ()=> console.log(`API en ligne sur port ${PORT}`));
 client.login(DISCORD_TOKEN).catch(err => { console.error("Erreur login Discord:", err); process.exit(1); });
-
-
-
-
-
-
-
-
