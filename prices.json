@@ -1,6 +1,6 @@
 {
-  "nitro1m": 10,
-  "nitro1y": 5,
-  "boost1m": 8,
-  "boost1y": 3
+  "nitro1m": 1.5,
+  "nitro1y": 10,
+  "boost1m": 3.5,
+  "boost1y": 30
 }
