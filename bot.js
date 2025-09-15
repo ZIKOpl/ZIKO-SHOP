@@ -161,7 +161,6 @@ async function updateStockEmbed() {
   } catch (e) { console.error("updateStockEmbed error", e); }
 }
 
-// --- Restock notification ---
 async function sendRestockNotification(productId, qty) {
   try {
     const guild = await client.guilds.fetch(GUILD_ID);
@@ -179,17 +178,10 @@ async function sendRestockNotification(productId, qty) {
       .setTimestamp();
 
     const message = await channel.send({ content: "@everyone", embeds: [embed] });
-
-    setTimeout(() => {
-      message.delete().catch(() => {});
-    }, 3600000);
-
-  } catch (err) {
-    console.error("sendRestockNotification error", err);
-  }
+    setTimeout(() => { message.delete().catch(() => {}); }, 3600000);
+  } catch (err) { console.error("sendRestockNotification error", err); }
 }
 
-// --- Admin panel ---
 async function ensureAdminPanel(){
   try {
     const guild = await client.guilds.fetch(GUILD_ID);
@@ -238,62 +230,62 @@ async function ensureAdminPanel(){
   } catch(e){ console.error("ensureAdminPanel", e); }
 }
 
-// --- Interaction handler ---
+// --- Interaction ---
 client.on("interactionCreate", async (interaction) => {
   try {
+    // Fermeture ticket
     if (interaction.isButton() && interaction.customId === "close_ticket") {
-      if (!interaction.replied && !interaction.deferred) 
+      if (!interaction.replied && !interaction.deferred) {
         await interaction.reply({ content: "Ticket fermé.", flags: 64 });
+      }
       await interaction.channel.delete().catch(()=>{});
       return;
     }
 
+    // Menu admin
     if (interaction.isStringSelectMenu() && interaction.customId === "admin_select_action") {
+      if (!interaction.deferred && !interaction.replied) {
+        await interaction.deferUpdate();
+      }
+
       const value = interaction.values[0];
       const [action, ...rest] = value.split("_");
       const productId = rest.join("_");
 
       let titleText = action === "price" ? "Modifier prix" : action === "add" ? "Ajouter stock" : "Retirer stock";
       const productName = PRODUCTS[productId]?.name || productId;
-      if (titleText.length + productName.length + 3 > 45) {
-        titleText = titleText.slice(0, 45 - productName.length - 3);
-      }
       const modalTitle = `${titleText} — ${productName}`;
 
       const modal = new ModalBuilder()
         .setCustomId(`admin_modal_${action}_${productId}`)
-        .setTitle(modalTitle);
+        .setTitle(modalTitle)
+        .addComponents(
+          new ActionRowBuilder().addComponents(
+            new TextInputBuilder()
+              .setCustomId("value_input")
+              .setLabel(action === "price" ? "Nouveau prix" : "Quantité (entier)")
+              .setStyle(TextInputStyle.Short)
+              .setRequired(true)
+          )
+        );
 
-      const input = new TextInputBuilder()
-        .setCustomId("value_input")
-        .setLabel(action === "price" ? "Nouveau prix" : "Quantité (entier)")
-        .setStyle(TextInputStyle.Short)
-        .setRequired(true)
-        .setPlaceholder(action === "price" ? "Ex: 3.50" : "Ex: 1");
-
-      modal.addComponents(new ActionRowBuilder().addComponents(input));
-
-      if (!interaction.replied && !interaction.deferred) {
-        await interaction.showModal(modal);
-        return;
-      }
+      return interaction.showModal(modal);
     }
 
-    if (interaction.type === InteractionType.ModalSubmit) {
-      if (!interaction.customId.startsWith("admin_modal_")) return;
+    // Modal submit
+    if (interaction.type === InteractionType.ModalSubmit && interaction.customId.startsWith("admin_modal_")) {
+      if (!interaction.deferred && !interaction.replied) {
+        await interaction.deferReply({ ephemeral: true });
+      }
 
       const parts = interaction.customId.split("_");
       const action = parts[2];
       const productId = parts.slice(3).join("_");
 
       const member = await interaction.guild?.members.fetch(interaction.user.id).catch(() => null);
-      if (!member) {
-        if (!interaction.replied && !interaction.deferred) await interaction.reply({ content: "Erreur permissions.", flags: 64 });
-        return;
-      }
+      if (!member) return interaction.editReply({ content: "Erreur permissions." });
       if (!member.roles.cache.has(STAFF_ROLE_ID) && !member.permissions.has("ManageGuild")) {
-        if (!interaction.replied && !interaction.deferred) await interaction.reply({ content: "Tu n'as pas la permission.", flags: 64 });
-        return;
+        return interaction.editReply({ content: "Tu n'as pas la permission." });
       }
 
       const value = interaction.fields.getTextInputValue("value_input").trim();
@@ -303,42 +295,38 @@ client.on("interactionCreate", async (interaction) => {
       if (action === "price") {
         const num = parseFloat(value.replace(",", "."));
         if (isNaN(num) || num < 0) {
-          if (!interaction.replied && !interaction.deferred) await interaction.reply({ content: "Prix invalide.", flags: 64 });
-          return;
+          return interaction.editReply({ content: "Prix invalide." });
         }
         prices[productId] = num;
         savePrices(prices);
-        if (!interaction.replied && !interaction.deferred) await interaction.reply({ content: `Prix de ${PRODUCTS[productId].name} mis à ${num}€`, flags: 64 });
+        await interaction.editReply({ content: `Prix de ${PRODUCTS[productId].name} mis à ${num}€` });
         await updateStockEmbed();
 
       } else if (action === "add" || action === "remove") {
         const qty = parseInt(value, 10);
         if (isNaN(qty) || qty <= 0) {
-          if (!interaction.replied && !interaction.deferred) await interaction.reply({ content: "Quantité invalide.", flags: 64 });
-          return;
+          return interaction.editReply({ content: "Quantité invalide." });
         }
         stock[productId] = (stock[productId] || 0) + (action === "add" ? qty : -qty);
         if (stock[productId] < 0) stock[productId] = 0;
         saveStock(stock);
 
-        if (!interaction.replied && !interaction.deferred) await interaction.reply({ content: `${action === "add" ? "Ajouté" : "Retiré"} ${qty} à ${PRODUCTS[productId].name}. Nouveau stock: ${stock[productId]}`, flags: 64 });
+        await interaction.editReply({ content: `${action === "add" ? "Ajouté" : "Retiré"} ${qty} à ${PRODUCTS[productId].name}. Nouveau stock: ${stock[productId]}` });
         await updateStockEmbed();
-
         if (action === "add") {
           await sendRestockNotification(productId, qty);
         }
       }
     }
-
   } catch (err) {
     console.error("interactionCreate error", err);
     try {
-      if (!interaction.replied && !interaction.deferred) await interaction.reply({ content: "Erreur interne.", flags: 64 });
-    } catch (e) {}
+      if (!interaction.replied) await interaction.reply({ content: "Erreur interne.", flags: 64 });
+    } catch {}
   }
 });
 
-// --- Notify order ---
+// --- Notifications commandes ---
 async function notifyOrder({ cart, discordId, username, ticketChannel }) {
   const guild = await client.guilds.fetch(GUILD_ID);
   const member = await guild.members.fetch(discordId).catch(()=>null);
@@ -369,9 +357,8 @@ client.once("ready", async () => {
   setInterval(async ()=>{ await updateStockEmbed(); }, 10000);
 });
 
-// --- Express server ---
+// --- Serveur Express ---
 app.listen(PORT, ()=> console.log(`API en ligne sur port ${PORT}`));
-
 client.login(DISCORD_TOKEN).catch(err => {
   console.error("Erreur login Discord:", err);
   process.exit(1);
