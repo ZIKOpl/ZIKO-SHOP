@@ -58,11 +58,11 @@ function savePrices(p){ fs.writeFileSync(PRICES_FILE, JSON.stringify(p,null,2),"
 
 // --- Product meta ---
 const PRODUCTS = {
-  nitro1m: { name: "Nitro 1 mois", img1: `${NETLIFY_ORIGIN}/Assets/nitro1.png` },
-  nitro1y: { name: "Nitro 1 an", img2: `${NETLIFY_ORIGIN}/Assets/nitro2.png` },
-  boost1m: { name: "Nitro Boost 1 mois", img3: `${NETLIFY_ORIGIN}/Assets/nitro3.png` },
-  boost1y: { name: "Nitro Boost 1 an", img4: `${NETLIFY_ORIGIN}/Assets/nitro4.png` },
-  serv14b: { name: "Serv Discord 14 Boost", img5: `${NETLIFY_ORIGIN}/Assets/boost.png` }
+  nitro1m: { name: "Nitro 1 mois", img: `${NETLIFY_ORIGIN}/Assets/nitro1.png` },
+  nitro1y: { name: "Nitro 1 an", img: `${NETLIFY_ORIGIN}/Assets/nitro2.png` },
+  boost1m: { name: "Nitro Boost 1 mois", img: `${NETLIFY_ORIGIN}/Assets/nitro3.png` },
+  boost1y: { name: "Nitro Boost 1 an", img: `${NETLIFY_ORIGIN}/Assets/nitro4.png` },
+  serv14b: { name: "Serv Discord 14 Boost", img: `${NETLIFY_ORIGIN}/Assets/boost.png` }
 };
 
 // --- Express ---
@@ -145,23 +145,52 @@ async function updateStockEmbed() {
         value: `💰 ${prices[key] ?? "N/A"}€\n📦 ${stock[key] ?? 0}`,
         inline: true
       });
-      if (!embed.data.thumbnail) embed.setThumbnail(p.img5);
+      if (!embed.data.thumbnail) embed.setThumbnail(p.img);
     }
 
-  // On met à jour UNIQUEMENT le message stock principal
-  let msg = null;
-  if (stockMessageId) {
-    msg = await channel.messages.fetch(stockMessageId).catch(() => null);
-  }
-  
-  if (msg) {
-    await msg.edit({ embeds: [embed] });
-  } else {
-    const m = await channel.send({ embeds: [embed] });
-    stockMessageId = m.id;
+    // Récupère ou envoie le message
+    let msg = null;
+    if (stockMessageId) msg = await channel.messages.fetch(stockMessageId).catch(() => null);
+    if (!msg) {
+      const messages = await channel.messages.fetch({ limit: 50 });
+      msg = messages.find(m => m.author.id === client.user.id && m.embeds.length > 0);
+    }
+    if (msg) await msg.edit({ embeds: [embed] });
+    else { const m = await channel.send({ embeds: [embed] }); stockMessageId = m.id; }
+
     state.stockMessageId = stockMessageId;
     saveState(state);
+  } catch (e) { console.error("updateStockEmbed error", e); }
+}
+
+// --- Restock notification ---
+async function sendRestockNotification(productId, qty) {
+  try {
+    const guild = await client.guilds.fetch(GUILD_ID);
+    const channel = await guild.channels.fetch(STOCK_CHANNEL_ID);
+    if (!channel) return;
+
+    const product = PRODUCTS[productId];
+    const stock = getStock();
+
+    const embed = new EmbedBuilder()
+      .setTitle("🚨 Restock effectué !")
+      .setDescription(`**${product.name}** a été restock.\n📦 Nouveau stock : **${stock[productId]}**\n➕ Quantité ajoutée : **${qty}**`)
+      .setColor(0x00ff00)
+      .setThumbnail(product.img)
+      .setTimestamp();
+
+    const message = await channel.send({ content: "@everyone", embeds: [embed] });
+
+    // Supprimer après 1 heure
+    setTimeout(() => {
+      message.delete().catch(() => {});
+    }, 3600000);
+
+  } catch (err) {
+    console.error("sendRestockNotification error", err);
   }
+}
 
 // Admin embed simplifié
 async function ensureAdminPanel(){
@@ -294,48 +323,16 @@ client.on("interactionCreate", async (interaction) => {
           if (!interaction.replied) await interaction.reply({ content: "Quantité invalide.", flags: 64 });
           return;
         }
-
-        // --- Mise à jour du stock ---
         stock[productId] = (stock[productId] || 0) + (action === "add" ? qty : -qty);
         if (stock[productId] < 0) stock[productId] = 0;
         saveStock(stock);
 
-        // --- Confirmation admin ---
-        if (!interaction.replied) {
-          await interaction.reply({ 
-            content: `${action === "add" ? "Ajouté" : "Retiré"} ${qty} à ${PRODUCTS[productId].name}. Nouveau stock: ${stock[productId]}`, 
-            flags: 64 
-          });
-        }
-
+        if (!interaction.replied) await interaction.reply({ content: `${action === "add" ? "Ajouté" : "Retiré"} ${qty} à ${PRODUCTS[productId].name}. Nouveau stock: ${stock[productId]}`, flags: 64 });
         await updateStockEmbed();
 
-        // --- Notification restock ---
-        if (action === "add" && qty > 0) {
-          try {
-            const guild = await client.guilds.fetch(GUILD_ID);
-            const stockChannel = await guild.channels.fetch(STOCK_CHANNEL_ID);
-
-            const embed = new EmbedBuilder()
-              .setTitle("📢 Nouveau Restock !")
-              .setDescription(
-                `Un nouveau produit vient d’être ajouté au stock !\n\n` +
-                `**Produit :** ${PRODUCTS[productId].name}\n` +
-                `**Quantité ajoutée :** ${qty}\n` +
-                `**Stock disponible :** ${stock[productId]}`
-              )
-              .setColor(0x00ccff)
-              .setTimestamp();
-
-            const restockMsg = await stockChannel.send({ content: "@everyone", embeds: [embed] });
-
-            setTimeout(() => {
-              restockMsg.delete().catch(() => {});
-            }, 3600000);
-
-          } catch (e) {
-            console.error("Erreur envoi message restock", e);
-          }
+        // Notification de restock si c'est un ajout
+        if (action === "add") {
+          await sendRestockNotification(productId, qty);
         }
       }
     }
@@ -381,5 +378,8 @@ client.once("ready", async () => {
 
 // Serveur Express
 app.listen(PORT, ()=> console.log(`API en ligne sur port ${PORT}`));
-client.login(DISCORD_TOKEN).catch(err => { console.error("Erreur login Discord:", err); process.exit(1); });
 
+client.login(DISCORD_TOKEN).catch(err => {
+  console.error("Erreur login Discord:", err);
+  process.exit(1);
+});
