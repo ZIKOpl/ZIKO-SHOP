@@ -41,8 +41,8 @@ const PRICES_FILE = path.join(__dirname, "prices.json");
 const STATE_FILE = path.join(__dirname, "state.json");
 
 // Création des fichiers si inexistants
-if (!fs.existsSync(STOCK_FILE)) fs.writeFileSync(STOCK_FILE, JSON.stringify({ nitro1m:10, nitro1y:5, boost1m:8, boost1y:3 }, null, 2));
-if (!fs.existsSync(PRICES_FILE)) fs.writeFileSync(PRICES_FILE, JSON.stringify({ nitro1m:1.5, nitro1y:10, boost1m:3.5, boost1y:30 }, null, 2));
+if (!fs.existsSync(STOCK_FILE)) fs.writeFileSync(STOCK_FILE, JSON.stringify({ nitro1m:0, nitro1y:0, boost1m:0, boost1y:0, serv14b:0 }, null, 2));
+if (!fs.existsSync(PRICES_FILE)) fs.writeFileSync(PRICES_FILE, JSON.stringify({ nitro1m:1.5, nitro1y:10, boost1m:3.5, boost1y:30, serv14b:14 }, null, 2));
 
 // --- State helpers ---
 function loadState() { try { return JSON.parse(fs.readFileSync(STATE_FILE, "utf8")); } catch(e){ return {}; } }
@@ -311,6 +311,7 @@ client.once("ready", async () => {
 // Serveur Express
 app.listen(PORT, ()=> console.log(`API en ligne sur port ${PORT}`));
 client.login(DISCORD_TOKEN).catch(err => { console.error("Erreur login Discord:", err); process.exit(1); });
+
 
 
 
