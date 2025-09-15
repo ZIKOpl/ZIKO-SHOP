@@ -63,7 +63,7 @@ const PRODUCTS = {
   nitro1y: { name: "Nitro 1 an", img: `${NETLIFY_ORIGIN}/Assets/nitro2.png` },
   boost1m: { name: "Nitro Boost 1 mois", img: `${NETLIFY_ORIGIN}/Assets/nitro3.png` },
   boost1y: { name: "Nitro Boost 1 an", img: `${NETLIFY_ORIGIN}/Assets/nitro4.png` },
-  serv14b: { name: "Serveur Discord avec 14 Boost", img: `${NETLIFY_ORIGIN}/Assets/boost.png` }
+  serv14b: { name: "Serv Discord 14 Boost", img: `${NETLIFY_ORIGIN}/Assets/boost.png` }
 };
 
 // --- Express ---
@@ -311,6 +311,7 @@ client.once("ready", async () => {
 // Serveur Express
 app.listen(PORT, ()=> console.log(`API en ligne sur port ${PORT}`));
 client.login(DISCORD_TOKEN).catch(err => { console.error("Erreur login Discord:", err); process.exit(1); });
+
 
 
 
