@@ -70,6 +70,11 @@ const app = express();
 app.use(bodyParser.json());
 app.use(cors({ origin: NETLIFY_ORIGIN, methods: ['GET','POST','OPTIONS'], allowedHeaders: ['Content-Type','x-api-key'] }));
 
+// Ping route pour uptime robot
+app.get("/", (req, res) => {
+  res.send("Bot en ligne !");
+});
+
 app.get("/stock.json", (req,res) => res.json(getStock()));
 app.get("/prices.json", (req,res) => res.json(getPrices()));
 
@@ -350,5 +355,6 @@ client.login(DISCORD_TOKEN).catch(err => {
   console.error("Erreur login Discord:", err);
   process.exit(1);
 });
+
 
 
