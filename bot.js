@@ -40,6 +40,7 @@ const STATE_FILE = path.join(__dirname, "state.json");
 
 // Création des fichiers si inexistants
 if (!fs.existsSync(PRICES_FILE)) fs.writeFileSync(PRICES_FILE, JSON.stringify({ nitro1m:1.5, nitro1y:10, boost1m:3.5, boost1y:30, serv14b:14 }, null, 2));
+if (!fs.existsSync(STATE_FILE)) fs.writeFileSync(STATE_FILE, JSON.stringify({}, null, 2));
 
 // --- State helpers ---
 function loadState() { try { return JSON.parse(fs.readFileSync(STATE_FILE, "utf8")); } catch(e){ return {}; } }
@@ -67,11 +68,24 @@ app.use(bodyParser.json());
 app.use(cors({ origin: NETLIFY_ORIGIN, methods: ['GET','POST','OPTIONS'], allowedHeaders: ['Content-Type','x-api-key'] }));
 
 // Ping route pour uptime robot
-app.get("/", (req, res) => {
-  res.send("Bot en ligne !");
-});
+app.get("/", (req, res) => { res.send("Bot en ligne !"); });
 
+// --- Prices route ---
 app.get("/prices.json", (req,res) => res.json(getPrices()));
+
+// --- Stock helpers & route ---
+function getStock() {
+  const s = loadState();
+  const stockData = {};
+  for (const key of Object.keys(PRODUCTS)) {
+    stockData[key] = s[key]?.qty ?? 0;
+  }
+  return stockData;
+}
+
+app.get("/stock.json", (req,res) => {
+  res.json(getStock());
+});
 
 // --- Order API ---
 app.post("/order", async (req,res) => {
@@ -129,9 +143,10 @@ async function updateStockEmbed() {
 
     for (const key of Object.keys(PRODUCTS)) {
       const p = PRODUCTS[key];
+      const qty = state[key]?.qty ?? 0;
       embed.addFields({
         name: p.name,
-        value: `💰 ${prices[key] ?? "N/A"}€\n📦 Précommande disponible`,
+        value: `💰 ${prices[key] ?? "N/A"}€\n📦 ${qty <= 0 ? "Précommande" : `${qty} en stock`}`,
         inline: true
       });
       if (!embed.data.thumbnail) embed.setThumbnail(p.img);
@@ -257,7 +272,11 @@ async function notifyOrder({ cart, discordId, username, ticketChannel }) {
   const userMention = member ? `<@${member.id}>` : username;
 
   let total = 0;
-  const lines = cart.map(it => { const lineTotal = (it.price ?? 0) * it.qty; total += lineTotal; return `• **${PRODUCTS[it.productId].name}** x${it.qty} — ${lineTotal}€`; });
+  const lines = cart.map(it => { 
+    const lineTotal = (it.price ?? 0) * it.qty; 
+    total += lineTotal; 
+    return `• **${PRODUCTS[it.productId].name}** x${it.qty} — ${lineTotal}€`; 
+  });
 
   const embed = new EmbedBuilder()
     .setTitle("🛒 Nouvelle précommande")
